@@ -42,8 +42,9 @@ function Game() {
   const [feedback, setFeedback] = useState(null); // answer result, shown until "Next"
   const [err, setErr] = useState('');
   const [rows, setRows] = useState([]);
+  const [left, setLeft] = useState(null); // seconds remaining
 
-  const next = () => { setFeedback(null); setErr(''); api('/api/puzzle').then(setPuzzle).catch((e) => setErr(e.message)); };
+  const next = () => { setFeedback(null); setLeft(null); setErr(''); api('/api/puzzle').then(setPuzzle).catch((e) => setErr(e.message)); };
 
   useEffect(() => {
     next();
@@ -52,6 +53,21 @@ function Game() {
     es.addEventListener('leaderboard', (e) => setRows(JSON.parse(e.data)));
     return () => es.close();
   }, []);
+
+  // countdown: the server enforces the limit; this just displays it and reports expiry
+  useEffect(() => {
+    if (!puzzle || feedback) return;
+    const end = Date.now() + puzzle.seconds * 1000;
+    const t = setInterval(() => {
+      const s = Math.ceil((end - Date.now()) / 1000);
+      setLeft(Math.max(s, 0));
+      if (s <= 0) {
+        clearInterval(t);
+        api('/api/answer', { timeout: true }).then(setFeedback).catch((e) => setErr(e.message));
+      }
+    }, 250);
+    return () => clearInterval(t);
+  }, [puzzle, feedback]);
 
   const answer = (digit) => api('/api/answer', { digit }).then(setFeedback).catch((e) => setErr(e.message));
   const over = feedback?.over;
@@ -62,6 +78,15 @@ function Game() {
         <span>Score <b>{feedback?.score ?? puzzle?.score ?? 0}</b></span>
         <span>{puzzle && ('❤️'.repeat(Math.max(feedback?.lives ?? puzzle.lives, 0)) || '💀')}</span>
       </div>
+      {puzzle && !feedback && (
+        <div className="w-full max-w-xs" role="timer" aria-live="off">
+          <div className="h-2 rounded bg-slate-700 overflow-hidden">
+            <div className={`h-full transition-all duration-300 ${(left ?? puzzle.seconds) <= 5 ? 'bg-red-500' : 'bg-green-500'}`}
+              style={{ width: `${((left ?? puzzle.seconds) / puzzle.seconds) * 100}%` }} />
+          </div>
+          <p className="text-center text-sm text-slate-300 mt-1">⏱ {left ?? puzzle.seconds}s</p>
+        </div>
+      )}
       {puzzle && <img src={puzzle.image} alt="Banana puzzle: what digit completes the equation?" className="rounded-lg bg-white max-w-full" />}
       <p className="h-6 text-red-400">{err}</p>
       {!feedback ? (
@@ -72,7 +97,7 @@ function Game() {
         </div>
       ) : (
         <div className="text-center">
-          <p className="text-xl font-semibold">{feedback.correct ? '✅ Correct!' : `❌ Wrong, it was ${feedback.solution}`}</p>
+          <p className="text-xl font-semibold">{feedback.correct ? '✅ Correct!' : feedback.timedOut ? `⏰ Time's up! It was ${feedback.solution}` : `❌ Wrong, it was ${feedback.solution}`}</p>
           <button onClick={next} className="mt-2 rounded bg-indigo-600 px-4 py-2 font-semibold hover:bg-indigo-500">
             {over ? `Game over (score ${feedback.score}). Play again` : 'Next puzzle'}
           </button>
