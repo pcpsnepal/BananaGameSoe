@@ -12,7 +12,7 @@ import { EventEmitter } from 'node:events';
 const BANANA = 'https://marcconrad.com/uob/banana/api.php?out=json';
 const LIVES = 3;
 
-export function build() {
+export function build({ timeLimitMs = 30000 } = {}) {
   const app = Fastify();
   const bus = new EventEmitter();
   const users = new Map();   // username -> bcrypt hash; ponytail: in memory, swap for a DB to persist
@@ -68,8 +68,8 @@ export function build() {
       const r = await fetch(BANANA);
       if (!r.ok) throw new Error(r.status);
       const p = await r.json();
-      req.session.game = { ...game, solution: p.solution };
-      return { image: p.question, lives: game.lives, score: game.score };
+      req.session.game = { ...game, solution: p.solution, issuedAt: Date.now() };
+      return { image: p.question, lives: game.lives, score: game.score, seconds: Math.round(timeLimitMs / 1000) };
     } catch {
       return reply.code(502).send({ error: 'Banana API unavailable' });
     }
@@ -77,14 +77,18 @@ export function build() {
 
   app.post('/api/answer', auth, async (req, reply) => {
     const g = req.session.game;
-    const digit = Number(req.body?.digit);
     if (!g || g.solution == null) return reply.code(409).send({ error: 'no active puzzle' });
-    if (!Number.isInteger(digit) || digit < 0 || digit > 9) return reply.code(400).send({ error: 'digit 0-9 required' });
-    const correct = digit === g.solution;
+    // Time limit is enforced here, not in the browser: a late answer counts as a timeout even if the digit is right.
+    // The client sends {timeout:true} when its countdown hits 0 (allowed 1s early for network/clock skew).
+    const elapsed = Date.now() - g.issuedAt;
+    const timedOut = elapsed > timeLimitMs || (req.body?.timeout === true && elapsed >= timeLimitMs - 1000);
+    const digit = Number(req.body?.digit);
+    if (!timedOut && (!Number.isInteger(digit) || digit < 0 || digit > 9)) return reply.code(400).send({ error: 'digit 0-9 required' });
+    const correct = !timedOut && digit === g.solution;
     const next = { lives: g.lives - (correct ? 0 : 1), score: g.score + (correct ? 1 : 0), solution: null };
     req.session.game = next;
     bus.emit('score', { user: req.session.user, score: next.score });
-    return { correct, solution: g.solution, score: next.score, lives: next.lives, over: next.lives <= 0 };
+    return { correct, timedOut, solution: g.solution, score: next.score, lives: next.lives, over: next.lives <= 0 };
   });
 
   app.get('/api/leaderboard', auth, async () => top());
