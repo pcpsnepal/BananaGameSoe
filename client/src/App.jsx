@@ -60,7 +60,7 @@ function Game() {
     <div className="flex flex-col items-center gap-4 w-full">
       <div className="flex gap-6 text-lg">
         <span>Score <b>{feedback?.score ?? puzzle?.score ?? 0}</b></span>
-        <span>{'❤️'.repeat(Math.max(feedback?.lives ?? puzzle?.lives ?? 0, 0)) || '💀'}</span>
+        <span>{puzzle && ('❤️'.repeat(Math.max(feedback?.lives ?? puzzle.lives, 0)) || '💀')}</span>
       </div>
       {puzzle && <img src={puzzle.image} alt="Banana puzzle: what digit completes the equation?" className="rounded-lg bg-white max-w-full" />}
       <p className="h-6 text-red-400">{err}</p>
