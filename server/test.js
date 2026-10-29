@@ -24,5 +24,23 @@ const w = await call('POST', '/api/answer', { digit: 1 });
 assert.deepEqual([w.body.correct, w.body.lives, w.body.score], [false, 2, 1]);
 assert.deepEqual((await call('GET', '/api/leaderboard')).body, [{ user: 'ann', score: 1 }]);
 assert.equal((await call('POST', '/api/login', { username: 'ann', password: 'nope' })).code, 401);
+
+// timer: separate app with a 50ms limit; a late but correct answer must count as a timeout
+const slow = build({ timeLimitMs: 50 });
+let ck = '';
+const call2 = async (method, url, payload) => {
+  const res = await slow.inject({ method, url, payload, headers: { cookie: ck } });
+  const c = res.cookies.at(-1);
+  if (c) ck = `${c.name}=${c.value}`;
+  return { code: res.statusCode, body: res.json() };
+};
+await call2('POST', '/api/register', { username: 'bob', password: 'secret2' });
+assert.equal((await call2('GET', '/api/puzzle')).body.seconds, 0);
+await new Promise((r) => setTimeout(r, 100));
+const late = await call2('POST', '/api/answer', { digit: 7 });
+assert.deepEqual([late.body.correct, late.body.timedOut, late.body.lives, late.body.score], [false, true, 2, 0]);
+await call2('GET', '/api/puzzle');
+assert.equal((await call2('POST', '/api/answer', { timeout: true })).body.timedOut, true); // client-reported timeout, no digit needed
 console.log('ok');
 await app.close();
+await slow.close();
