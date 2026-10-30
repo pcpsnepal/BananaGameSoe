@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Landing from './Landing.jsx';
 
 const api = async (url, body) => {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
@@ -6,24 +7,6 @@ const api = async (url, body) => {
   if (!r.ok) throw new Error(j.error || j.message);
   return j;
 };
-
-function Auth({ onUser }) {
-  const [f, setF] = useState({ username: '', password: '' });
-  const [err, setErr] = useState('');
-  const go = (kind) => api('/api/' + kind, f).then((r) => onUser(r.user)).catch((e) => setErr(e.message));
-  const input = 'w-full rounded bg-slate-800 border border-slate-600 px-3 py-2';
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); go('login'); }} className="w-full max-w-xs flex flex-col gap-3">
-      <input className={input} placeholder="username" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} />
-      <input className={input} type="password" placeholder="password (6+)" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
-      <p className="text-red-400 h-5">{err}</p>
-      <div className="flex gap-2">
-        <button className="flex-1 rounded bg-yellow-500 text-slate-900 font-bold py-2">Log in</button>
-        <button type="button" onClick={() => go('register')} className="flex-1 rounded bg-slate-700 font-bold py-2">Register</button>
-      </div>
-    </form>
-  );
-}
 
 function Leaderboard({ rows }) {
   return (
@@ -114,7 +97,7 @@ export default function App() {
   const logout = () => api('/api/logout', {}).then(() => setUser(null));
 
   return (
-    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center gap-4 p-4">
+    <main className={`min-h-screen text-slate-100 flex flex-col items-center gap-4 p-4 ${user ? 'bg-slate-900' : 'bg-gradient-to-b from-amber-800 via-slate-900 to-slate-900'}`}>
       <h1 className="text-3xl font-extrabold tracking-wide">🍌 BANANA GAME</h1>
       {user === undefined ? null : user ? (
         <>
@@ -122,7 +105,7 @@ export default function App() {
           <p className="text-slate-300 text-center max-w-xs">Find the digit hidden behind the banana to complete the equation.</p>
           <Game />
         </>
-      ) : <Auth onUser={setUser} />}
+      ) : <Landing onUser={setUser} api={api} />}
     </main>
   );
 }
