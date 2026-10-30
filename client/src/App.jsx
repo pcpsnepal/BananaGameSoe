@@ -4,7 +4,7 @@ import Landing from './Landing.jsx';
 const api = async (url, body) => {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error || j.message);
+  if (!r.ok) throw Object.assign(new Error(j.error || j.message), { fields: j.fields });
   return j;
 };
 
@@ -14,7 +14,7 @@ function Leaderboard({ rows }) {
       <h2 className="font-bold mb-2">🏆 Leaderboard <span className="text-xs text-slate-400">(live)</span></h2>
       {rows.length === 0 && <p className="text-slate-400 text-sm">No scores yet.</p>}
       <ol className="space-y-1">
-        {rows.map((r, i) => <li key={r.user} className="flex justify-between"><span>{i + 1}. {r.user}</span><b>{r.score}</b></li>)}
+        {rows.map((r, i) => <li key={i} className="flex justify-between"><span>{i + 1}. {r.user}</span><b>{r.score}</b></li>)}
       </ol>
     </aside>
   );
@@ -93,7 +93,7 @@ function Game() {
 
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
-  useEffect(() => { api('/api/me').then((r) => setUser(r.user)); }, []);
+  useEffect(() => { api('/api/me').then((r) => setUser(r.name)); }, []);
   const logout = () => api('/api/logout', {}).then(() => setUser(null));
 
   return (

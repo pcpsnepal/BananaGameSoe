@@ -8,15 +8,30 @@ import cookie from '@fastify/cookie';
 import session from '@fastify/session';
 import bcrypt from 'bcryptjs';
 import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const BANANA = 'https://marcconrad.com/uob/banana/api.php?out=json';
 const LIVES = 3;
 
-export function build({ timeLimitMs = 30000 } = {}) {
+// Registration rules. The client repeats these for instant feedback; the server is the one that enforces them.
+export function validateRegistration({ name, username, password, confirm } = {}) {
+  const e = {};
+  if (!/^\p{L}[\p{L}\p{M} '.-]{1,29}$/u.test(String(name ?? '').trim())) e.name = 'Name must be 2-30 characters (letters, spaces, . - \')';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,19}$/.test(String(username ?? '').trim())) e.username = 'Username must be 3-20 characters: letters, numbers, . _ - (start with a letter or number)';
+  const pw = String(password ?? '');
+  if (pw.length < 8) e.password = 'Password must be at least 8 characters';
+  else if (Buffer.byteLength(pw) > 72) e.password = 'Password is too long (72 bytes max)'; // bcrypt ignores everything past 72 bytes
+  else if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) e.password = 'Password needs at least one letter and one number';
+  else if (pw.toLowerCase() === String(username ?? '').trim().toLowerCase()) e.password = 'Password must not be the same as the username';
+  if (!e.password && pw !== String(confirm ?? '')) e.confirm = 'Passwords do not match';
+  return e;
+}
+
+export function build({ timeLimitMs = 30000, dataFile = null } = {}) {
   const app = Fastify();
   const bus = new EventEmitter();
-  const users = new Map();   // username -> bcrypt hash; ponytail: in memory, swap for a DB to persist
-  const best = new Map();    // username -> best score
+  const users = new Map();   // lowercase username -> { username, name, hash }
+  const best = new Map();    // lowercase username -> best score
   const clients = new Set(); // open SSE responses
 
   app.register(cookie);
@@ -27,37 +42,50 @@ export function build({ timeLimitMs = 30000 } = {}) {
   });
 
   const auth = { preHandler: async (req, reply) => { if (!req.session.user) return reply.code(401).send({ error: 'login required' }); } };
-  const top = () => [...best].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([user, score]) => ({ user, score }));
+  const top = () => [...best].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([key, score]) => ({ user: users.get(key)?.name ?? key, score }));
+
+  // Accounts and best scores survive restarts when dataFile is set. ponytail: whole-file JSON rewrite, use a DB if this grows.
+  if (dataFile && existsSync(dataFile)) {
+    const d = JSON.parse(readFileSync(dataFile, 'utf8'));
+    d.users.forEach(([k, v]) => users.set(k, v));
+    d.best.forEach(([k, v]) => best.set(k, v));
+  }
+  const save = () => dataFile && writeFileSync(dataFile, JSON.stringify({ users: [...users], best: [...best] }));
 
   // ---- events ----
   bus.on('score', ({ user, score }) => {
     if (score <= (best.get(user) || 0)) return;
     best.set(user, score);
+    save();
     const msg = `event: leaderboard\ndata: ${JSON.stringify(top())}\n\n`;
     clients.forEach((c) => c.write(msg));
   });
 
   // ---- identity ----
   app.post('/api/register', async (req, reply) => {
-    const { username, password } = req.body ?? {};
-    if (!/^\w{3,20}$/.test(username ?? '') || (password ?? '').length < 6) return reply.code(400).send({ error: 'username 3-20 chars, password 6+ chars' });
-    if (users.has(username)) return reply.code(409).send({ error: 'user exists' });
-    users.set(username, await bcrypt.hash(password, 10));
-    req.session.user = username;
-    return { user: username };
+    const fields = validateRegistration(req.body);
+    const key = String(req.body?.username ?? '').trim().toLowerCase();
+    if (!fields.username && users.has(key)) fields.username = 'That username is taken';
+    if (Object.keys(fields).length) return reply.code(Object.values(fields).includes('That username is taken') ? 409 : 400).send({ error: Object.values(fields)[0], fields });
+    const { name, username, password } = req.body;
+    users.set(key, { username: username.trim(), name: name.trim(), hash: await bcrypt.hash(password, 10) });
+    save();
+    req.session.user = key;
+    return { user: key, name: name.trim() };
   });
 
   app.post('/api/login', async (req, reply) => {
     const { username, password } = req.body ?? {};
-    const hash = users.get(username);
-    if (!hash || !(await bcrypt.compare(password ?? '', hash))) return reply.code(401).send({ error: 'bad credentials' });
+    const key = String(username ?? '').trim().toLowerCase();
+    const u = users.get(key);
+    if (!u || !(await bcrypt.compare(String(password ?? ''), u.hash))) return reply.code(401).send({ error: 'Wrong username or password' });
     await req.session.regenerate(); // fresh session id: prevents session fixation
-    req.session.user = username;
-    return { user: username };
+    req.session.user = key;
+    return { user: key, name: u.name };
   });
 
   app.post('/api/logout', async (req) => { await req.session.destroy(); return { ok: true }; });
-  app.get('/api/me', async (req) => ({ user: req.session.user ?? null }));
+  app.get('/api/me', async (req) => ({ user: req.session.user ?? null, name: users.get(req.session.user)?.name ?? null }));
 
   // ---- game ----
   // The solution stays in the server-side session; the browser only gets the image URL.
