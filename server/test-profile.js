@@ -9,16 +9,16 @@ import { applyAnswer, applyGameOver, newStats, profileView, AVATARS } from './pr
 import { build } from './app.js';
 
 // --- pure rules ---
-let r = applyAnswer(newStats(), { correct: true, elapsedMs: 5000, streak: 1 });
+let r = applyAnswer(newStats(), { correct: true, guesses: 5, streak: 1 });
 assert.deepEqual(r.earned, ['first_banana']);
-r = applyAnswer(r.stats, { correct: true, elapsedMs: 5000, streak: 2 });
+r = applyAnswer(r.stats, { correct: true, guesses: 4, streak: 2 });
 assert.deepEqual(r.earned, []); // never awarded twice
-assert.deepEqual([r.stats.answered, r.stats.correct, r.stats.fastestMs], [2, 2, 5000]);
-assert.deepEqual(applyAnswer(newStats(), { correct: true, elapsedMs: 2999, streak: 1 }).earned, ['first_banana', 'speed_demon']);
-assert.deepEqual(applyAnswer(newStats(), { correct: true, elapsedMs: 3000, streak: 1 }).earned, ['first_banana']); // 3.0s is not "under 3"
-assert.ok(applyAnswer(newStats(), { correct: true, elapsedMs: 9000, streak: 5 }).earned.includes('hot_streak'));
-assert.deepEqual(applyAnswer(newStats(), { correct: false, elapsedMs: 100, streak: 0 }).earned, []); // wrong answers earn nothing
-assert.equal(applyAnswer(newStats(), { correct: false, elapsedMs: 100, streak: 0 }).stats.fastestMs, null);
+assert.deepEqual([r.stats.answered, r.stats.correct, r.stats.fewestGuesses], [2, 2, 4]);
+assert.deepEqual(applyAnswer(newStats(), { correct: true, guesses: 3, streak: 1 }).earned, ['first_banana', 'sharp_mind']);
+assert.deepEqual(applyAnswer(newStats(), { correct: true, guesses: 4, streak: 1 }).earned, ['first_banana']); // 4 guesses is not "3 or fewer"
+assert.ok(applyAnswer(newStats(), { correct: true, guesses: 9, streak: 5 }).earned.includes('hot_streak'));
+assert.deepEqual(applyAnswer(newStats(), { correct: false, guesses: 1, streak: 0 }).earned, []); // a failed code earns nothing
+assert.equal(applyAnswer(newStats(), { correct: false, guesses: 1, streak: 0 }).stats.fewestGuesses, null);
 let g = newStats();
 for (let i = 1; i <= 9; i++) g = applyGameOver(g, 10).stats;
 assert.deepEqual(g.games, 9);
@@ -30,7 +30,7 @@ assert.equal(profileView({ ...newStats(), answered: 4, correct: 3 }, 0).accuracy
 assert.deepEqual(profileView(tenth.stats, 0).badges.filter((b) => b.earned).map((b) => b.id), ['veteran']);
 
 // --- through the API ---
-const banana = { getPuzzle: async () => ({ image: 'data:image/png;base64,Z', solution: 7, source: 'live', latencyMs: 5 }), stats: () => ({}) };
+const banana = { getDigits: async (n) => ({ digits: Array(n).fill(7), source: 'live', latencyMs: 5 }), stats: () => ({}) };
 const quotes = { getQuote: async () => ({ text: 'q', author: 'a', source: 'local' }) };
 const dir = mkdtempSync(join(tmpdir(), 'banana-prof-'));
 const file = join(dir, 'data.json');
@@ -47,20 +47,20 @@ const reg = await call('POST', '/api/register', { name: 'Ann Lee', username: 'an
 assert.equal(reg.body.avatar, '🍌');
 
 await call('POST', '/api/game', { difficulty: 'easy' });
-const a1 = (await call('POST', '/api/answer', { digit: 7 })).body; // instant answer: correct and < 3s
-assert.deepEqual(a1.newBadges.map((b) => b.id).sort(), ['first_banana', 'speed_demon']);
+const a1 = (await call('POST', '/api/guess', { guess: [7, 7, 7, 7] })).body; // cracked on the first guess
+assert.deepEqual(a1.newBadges.map((b) => b.id).sort(), ['first_banana', 'sharp_mind']);
 assert.equal(a1.newBadges[0].name !== undefined, true);
-await call('GET', '/api/puzzle');
-assert.deepEqual((await call('POST', '/api/answer', { digit: 7 })).body.newBadges, []); // nothing new
-await call('GET', '/api/puzzle');
-await call('POST', '/api/answer', { digit: 1 }); // wrong
-for (let i = 0; i < 2; i++) { await call('GET', '/api/puzzle'); await call('POST', '/api/answer', { digit: 1 }); } // game over
+await call('GET', '/api/round');
+assert.deepEqual((await call('POST', '/api/guess', { guess: [7, 7, 7, 7] })).body.newBadges, []); // nothing new
+for (let round = 0; round < 3; round++) { // three failed codes (10 wrong guesses each on easy) end the game
+  await call('GET', '/api/round');
+  let last; do { last = (await call('POST', '/api/guess', { guess: [1, 1, 1, 1] })).body; } while (!last.done);
+}
 
 const p = (await call('GET', '/api/profile')).body;
-assert.deepEqual([p.games_played, p.accuracy, p.best_streak], [1, 40, 2]); // 2 correct of 5 answers (3 wrong ends the game)
+assert.deepEqual([p.games_played, p.accuracy, p.best_streak, p.fewest_guesses], [1, 40, 2, 1]); // 2 codes cracked of 5 played
 assert.equal(p.total_score, p.best_score);
-assert.ok(p.fastest_ms < 3000);
-assert.deepEqual(p.badges.filter((b) => b.earned).map((b) => b.id).sort(), ['first_banana', 'speed_demon']);
+assert.deepEqual(p.badges.filter((b) => b.earned).map((b) => b.id).sort(), ['first_banana', 'sharp_mind']);
 assert.equal(p.badges.length, 4);
 assert.ok(!('hash' in p) && !('role' in p));
 
