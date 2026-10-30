@@ -9,7 +9,7 @@ export function createGame({ timeLimitMs, bus }) {
   // What the browser may see: never the solution.
   const view = (g) => ({
     image: g.image, lives: g.lives, score: g.score, streak: g.streak, difficulty: g.difficulty,
-    hints: g.hints, skips: g.skips, removed: g.removed, seconds: secondsLeft(g), total: Math.round(limitMs(g) / 1000),
+    hints: g.hints, skips: g.skips, removed: g.removed, api: g.api, seconds: secondsLeft(g), total: Math.round(limitMs(g) / 1000),
   });
 
   // Score one puzzle. Points: (10 + seconds left) x difficulty x streak bonus (+25% per streak step, max +100%), halved if the hint was used.
