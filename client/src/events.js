@@ -7,6 +7,7 @@
 //   game:over         same detail as above                                            the last life was lost
 //   time:warning      { seconds }                                                     5 seconds left on the clock
 //   powerup:used      { type: 'hint' | 'skip' }
+//   badge:earned      { id, name, desc }                                              an answer earned a badge
 //   session:expired   (none)                                                          the server says we are logged out
 const bus = new EventTarget();
 

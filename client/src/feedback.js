@@ -9,6 +9,7 @@ export function subscribeFeedback() {
     on('game:over', () => sfx('gameover')),
     on('time:warning', () => sfx('warning')),
     on('powerup:used', () => sfx('powerup')),
+    on('badge:earned', () => sfx('powerup')),
   ];
   return () => offs.forEach((off) => off());
 }

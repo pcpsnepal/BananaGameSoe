@@ -1,8 +1,9 @@
 // Game endpoints. The solution stays in the server-side session; the browser only gets the image.
 import { DIFF, LIVES, HINTS, SKIPS } from '../config.js';
 import { requireLogin } from './auth.js';
+import { BADGES } from '../profile.js';
 
-export function gameRoutes(app, { game, getPuzzle, getQuote }) {
+export function gameRoutes(app, { game, getPuzzle, getQuote, store }) {
   const auth = { preHandler: requireLogin };
   const { limitMs, expired, view, settle } = game;
 
@@ -11,6 +12,13 @@ export function gameRoutes(app, { game, getPuzzle, getQuote }) {
   async function withPuzzle(g) {
     const p = await getPuzzle();
     return { ...g, image: p.image, solution: p.solution, api: { source: p.source, latencyMs: p.latencyMs }, issuedAt: Date.now(), removed: [], hinted: false };
+  }
+  // Settle an answer, then tell the player about badges that answer earned (stats are updated synchronously by the event subscribers).
+  function settleAndAward(user, g, correct, timedOut) {
+    const had = new Set(store.stats.get(user)?.badges ?? []);
+    const { next, result } = settle(user, g, correct, timedOut);
+    const newBadges = (store.stats.get(user)?.badges ?? []).filter((id) => !had.has(id)).map((id) => ({ id, ...BADGES[id] }));
+    return { next, result: { ...result, newBadges } };
   }
   // When a game ends, attach a motivational quote (external API with local fallback).
   const finish = async (result) => (result.over ? { ...result, quote: await getQuote() } : result);
@@ -35,7 +43,7 @@ export function gameRoutes(app, { game, getPuzzle, getQuote }) {
     if (!g) return reply.code(409).send({ error: 'no active game' });
     if (g.solution != null) {
       if (!expired(g)) return view(g);
-      const { next, result } = settle(req.session.user, g, false, true);
+      const { next, result } = settleAndAward(req.session.user, g, false, true);
       req.session.game = next;
       return { result: await finish(result) };
     }
@@ -57,7 +65,7 @@ export function gameRoutes(app, { game, getPuzzle, getQuote }) {
     const timedOut = elapsed > limitMs(g) || (req.body?.timeout === true && elapsed >= limitMs(g) - 1000);
     const digit = Number(req.body?.digit);
     if (!timedOut && (!Number.isInteger(digit) || digit < 0 || digit > 9)) return reply.code(400).send({ error: 'digit 0-9 required' });
-    const { next, result } = settle(req.session.user, g, !timedOut && digit === g.solution, timedOut);
+    const { next, result } = settleAndAward(req.session.user, g, !timedOut && digit === g.solution, timedOut);
     req.session.game = next;
     return finish(result);
   });

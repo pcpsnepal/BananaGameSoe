@@ -18,6 +18,7 @@ export function publicRoutes(app, { store, events, banana }) {
     data: [...store.best].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([key, bestScore], i) => ({
       rank: i + 1,
       player: store.nameOf(key),
+      avatar: store.avatarOf(key),
       best_score: bestScore,
       total_score: store.stats.get(key)?.total ?? 0,
       games_played: store.stats.get(key)?.games ?? 0,

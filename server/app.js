@@ -5,6 +5,7 @@
 //                                                    services/quotes  ZenQuotes client (timeout, cache, local fallback)
 //   routes/auth.js   virtual identity (bcrypt, session cookie, roles)   security.js  CSRF, origin check, headers, login limiter
 //   routes/admin.js  admin-only: players, login history, CSV export
+//   profile.js       stats + badge rules (pure)      routes/profile.js  profile page data, avatar
 //   routes/game.js   game endpoints                  routes/public.js leaderboard, event stream, public /api/v1
 // The Banana API call pattern follows the public docs; everything else was written with LLM help (Claude).
 import Fastify from 'fastify';
@@ -18,6 +19,7 @@ import { createQuoteClient } from './services/quotes.js';
 import { registerSecurity, createLoginLimiter } from './security.js';
 import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
+import { profileRoutes } from './routes/profile.js';
 import { gameRoutes } from './routes/game.js';
 import { publicRoutes } from './routes/public.js';
 
@@ -47,7 +49,8 @@ export function build({
   registerSecurity(app, { allowedOrigins });
   authRoutes(app, { store, limiter: createLoginLimiter({ max: loginMaxFailures, windowMs: loginWindowMs }) });
   adminRoutes(app, { store });
-  gameRoutes(app, { game, getPuzzle: banana.getPuzzle, getQuote: quotes.getQuote });
+  gameRoutes(app, { game, getPuzzle: banana.getPuzzle, getQuote: quotes.getQuote, store });
+  profileRoutes(app, { store });
   publicRoutes(app, { store, events, banana });
 
   return app;

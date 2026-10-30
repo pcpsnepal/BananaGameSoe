@@ -32,7 +32,7 @@ function Leaderboard({ rows, live }) {
       <h2 className="font-bold mb-2">🏆 Leaderboard <span className={`text-xs ${live ? 'text-slate-400' : 'text-amber-400'}`}>{live ? '(live)' : '(reconnecting…)'}</span></h2>
       {rows.length === 0 && <p className="text-slate-400 text-sm">No scores yet.</p>}
       <ol className="space-y-1">
-        {rows.map((r, i) => <li key={i} className="flex justify-between"><span>{i + 1}. {r.user}</span><b>{r.score}</b></li>)}
+        {rows.map((r, i) => <li key={i} className="flex justify-between"><span>{i + 1}. {r.avatar} {r.user}</span><b>{r.score}</b></li>)}
       </ol>
     </section>
   );
@@ -91,6 +91,7 @@ function Game() {
     setFb(r);
     emit('puzzle:completed', r);
     if (r.over) emit('game:over', r);
+    (r.newBadges ?? []).forEach((b) => emit('badge:earned', b));
   }, []);
 
   // Visual feedback is just another subscriber of the same event.
@@ -229,6 +230,52 @@ function Game() {
   );
 }
 
+function Profile({ onAvatar }) {
+  const [p, setP] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => { api('/api/profile').then(setP).catch((e) => setErr(e.message)); }, []);
+  const pick = (avatar) => api('/api/profile', { avatar }).then(() => { setP((x) => ({ ...x, avatar })); onAvatar(avatar); }).catch((e) => setErr(e.message));
+  if (err) return <p className="text-red-400" role="alert">{err}</p>;
+  if (!p) return null;
+  const stat = (label, value) => (
+    <div className="rounded-lg bg-slate-700/60 px-3 py-2 text-center"><div className="text-xl font-bold">{value}</div><div className="text-xs text-slate-400">{label}</div></div>
+  );
+  return (
+    <div className="w-full max-w-md flex flex-col gap-4">
+      <section className="rounded-lg bg-slate-800 p-4 text-center">
+        <div className="text-6xl" aria-hidden="true">{p.avatar}</div>
+        <h2 className="text-xl font-bold mt-1">{p.name}</h2>
+        <p className="text-sm text-slate-400">@{p.username}{p.last_login && <> · last visit {new Date(p.last_login).toLocaleString()}</>}</p>
+        <div className="mt-3 flex flex-wrap justify-center gap-2" role="radiogroup" aria-label="Choose your avatar">
+          {p.avatars.map((a) => (
+            <button key={a} role="radio" aria-checked={a === p.avatar} onClick={() => pick(a)}
+              className={`h-10 w-10 rounded-lg text-2xl ${a === p.avatar ? 'bg-yellow-500' : 'bg-slate-700 hover:bg-slate-600'}`}>{a}</button>
+          ))}
+        </div>
+      </section>
+      <section className="grid grid-cols-3 gap-2">
+        {stat('Best score', p.best_score)}
+        {stat('Games', p.games_played)}
+        {stat('Total score', p.total_score)}
+        {stat('Accuracy', p.accuracy === null ? '-' : `${p.accuracy}%`)}
+        {stat('Best streak', p.best_streak)}
+        {stat('Fastest', p.fastest_ms === null ? '-' : `${(p.fastest_ms / 1000).toFixed(1)}s`)}
+      </section>
+      <section className="rounded-lg bg-slate-800 p-4">
+        <h2 className="font-bold mb-2">🏅 Badges</h2>
+        <ul className="grid grid-cols-2 gap-2">
+          {p.badges.map((b) => (
+            <li key={b.id} className={`rounded-lg p-3 text-sm ${b.earned ? 'bg-yellow-500/20 ring-1 ring-yellow-500' : 'bg-slate-700/50 opacity-60'}`}>
+              <div className="font-semibold">{b.earned ? '🏅' : '🔒'} {b.name}</div>
+              <div className="text-xs text-slate-400">{b.desc}</div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+
 function Admin() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
@@ -262,12 +309,17 @@ function Admin() {
 export default function App() {
   const [me, setMe] = useState(undefined); // undefined = loading, null = logged out, else { name, role }
   const [notice, setNotice] = useState('');
-  const [view, setView] = useState('game'); // game | admin
+  const [view, setView] = useState('game'); // game | admin | profile
+  const [toasts, setToasts] = useState([]);
   useEffect(() => { api('/api/me').then((r) => setMe(r.user ? r : null)); }, []);
   useEffect(() => {
     return on('session:expired', () => { setMe(null); setView('game'); setNotice('Your session expired. Please log in again.'); });
   }, []);
   useEffect(() => subscribeFeedback(), []); // sound effects subscribe to game events
+  useEffect(() => on('badge:earned', (b) => { // a toast is another subscriber of the same event
+    setToasts((t) => [...t, b]);
+    setTimeout(() => setToasts((t) => t.slice(1)), 4000);
+  }), []);
   const [muted, setMutedState] = useState(isMuted());
   const toggleSound = () => { setMuted(!muted); setMutedState(!muted); };
   const logout = () => api('/api/logout', {}).then(() => { csrf = null; setMe(null); setView('game'); setNotice(''); });
@@ -279,12 +331,16 @@ export default function App() {
       {me === undefined ? null : me ? (
         <>
           <p className="text-sm text-slate-400">
-            Playing as <b className="text-slate-100">{user}</b>
+            <span aria-hidden="true">{me.avatar}</span> <b className="text-slate-100">{user}</b>
+            {' '}· <button onClick={() => setView(view === 'profile' ? 'game' : 'profile')} className="underline">{view === 'profile' ? 'back to game' : 'profile'}</button>
             {me.role === 'admin' && <> · <button onClick={() => setView(view === 'admin' ? 'game' : 'admin')} className="underline">{view === 'admin' ? 'back to game' : 'admin'}</button></>}
             {' '}· <button onClick={toggleSound} aria-pressed={!muted} className="underline">{muted ? '🔇 sound off' : '🔊 sound on'}</button>
             {' '}· <button onClick={logout} className="underline">log out</button>
           </p>
-          {view === 'admin' && me.role === 'admin' ? <Admin /> : <Game />}
+          {view === 'admin' && me.role === 'admin' ? <Admin /> : view === 'profile' ? <Profile onAvatar={(avatar) => setMe((m) => ({ ...m, avatar }))} /> : <Game />}
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex flex-col gap-2" role="status" aria-live="polite">
+            {toasts.map((b, i) => <div key={i} className="rounded-lg bg-yellow-500 text-slate-900 px-4 py-2 font-semibold shadow-lg">🏅 Badge earned: {b.name}</div>)}
+          </div>
         </>
       ) : <Landing onUser={(r) => { setNotice(''); setMe(r); }} api={api} notice={notice} />}
     </main>
