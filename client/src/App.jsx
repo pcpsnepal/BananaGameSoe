@@ -139,6 +139,11 @@ function Game() {
           )}
 
           {puzzle && <img src={puzzle.image} alt="Banana puzzle: what digit replaces the banana?" className="rounded-lg bg-white max-w-full" />}
+          {puzzle?.api && (
+            <p className="text-xs text-slate-500" title="Round-trip time of our server's request to the Banana API">
+              Banana API: {puzzle.api.source === 'live' ? `${puzzle.api.latencyMs} ms` : 'cached puzzle (service unreachable)'}
+            </p>
+          )}
           <p className="h-5 text-red-400 text-sm" role="alert">{err}</p>
 
           {!fb ? (
@@ -163,6 +168,17 @@ function Game() {
                 {fb.correct ? `✅ Correct! +${fb.points} pts` : fb.timedOut ? `⏰ Time's up! It was ${fb.solution}` : `❌ Wrong, it was ${fb.solution}`}
               </p>
               {fb.over && <p className="mt-1 text-slate-300">Game over: <b>{fb.score}</b> points, best streak <b>{fb.bestStreak}</b></p>}
+              {fb.over && fb.quote && (
+                <figure className="mt-3 max-w-xs mx-auto rounded-lg bg-slate-800 p-3 text-sm">
+                  <blockquote className="italic text-slate-200">“{fb.quote.text}”</blockquote>
+                  <figcaption className="mt-1 text-slate-400">
+                    {fb.quote.author}
+                    {fb.quote.source === 'local'
+                      ? ' (offline quote)'
+                      : <> · <a className="underline" href="https://zenquotes.io/" target="_blank" rel="noreferrer">Inspirational quotes provided by ZenQuotes API</a></>}
+                  </figcaption>
+                </figure>
+              )}
               <button onClick={next} autoFocus className="mt-2 rounded bg-indigo-600 px-4 py-2 font-semibold hover:bg-indigo-500">
                 {fb.over ? 'Play again' : 'Next puzzle'}
               </button>

@@ -2,7 +2,7 @@
 import { DIFF, LIVES, HINTS, SKIPS } from '../config.js';
 import { requireLogin } from './auth.js';
 
-export function gameRoutes(app, { game, getPuzzle }) {
+export function gameRoutes(app, { game, getPuzzle, getQuote }) {
   const auth = { preHandler: requireLogin };
   const { limitMs, expired, view, settle } = game;
 
@@ -10,8 +10,10 @@ export function gameRoutes(app, { game, getPuzzle }) {
   // ponytail: the image is kept in the in-memory session; fine for a handful of players.
   async function withPuzzle(g) {
     const p = await getPuzzle();
-    return { ...g, image: p.image, solution: p.solution, issuedAt: Date.now(), removed: [], hinted: false };
+    return { ...g, image: p.image, solution: p.solution, api: { source: p.source, latencyMs: p.latencyMs }, issuedAt: Date.now(), removed: [], hinted: false };
   }
+  // When a game ends, attach a motivational quote (external API with local fallback).
+  const finish = async (result) => (result.over ? { ...result, quote: await getQuote() } : result);
   const unavailable = (reply) => reply.code(502).send({ error: 'Banana API unavailable' });
 
   app.post('/api/game', auth, async (req, reply) => {
@@ -35,7 +37,7 @@ export function gameRoutes(app, { game, getPuzzle }) {
       if (!expired(g)) return view(g);
       const { next, result } = settle(req.session.user, g, false, true);
       req.session.game = next;
-      return { result };
+      return { result: await finish(result) };
     }
     try {
       g = await withPuzzle(g);
@@ -57,7 +59,7 @@ export function gameRoutes(app, { game, getPuzzle }) {
     if (!timedOut && (!Number.isInteger(digit) || digit < 0 || digit > 9)) return reply.code(400).send({ error: 'digit 0-9 required' });
     const { next, result } = settle(req.session.user, g, !timedOut && digit === g.solution, timedOut);
     req.session.game = next;
-    return result;
+    return finish(result);
   });
 
   // Power-up: remove 5 wrong digits. Costs half the points for this puzzle.

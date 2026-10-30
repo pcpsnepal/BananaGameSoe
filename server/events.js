@@ -17,6 +17,11 @@ export function createEvents(store) {
     store.save();
     broadcast('leaderboard', store.top());
   });
+  bus.on('game:over', ({ user, score }) => {
+    const s = store.stats.get(user) ?? { games: 0, total: 0 };
+    store.stats.set(user, { games: s.games + 1, total: s.total + score });
+    store.save();
+  });
   bus.on('game:over', ({ user, score, difficulty }) => broadcast('activity', { text: `${store.nameOf(user)} finished a ${difficulty} game with ${score} pts` }));
   bus.on('streak', ({ user, streak }) => broadcast('activity', { text: `🔥 ${store.nameOf(user)} is on a ${streak}-answer streak` }));
 
