@@ -26,6 +26,18 @@ function validate(f) {
   return e;
 }
 
+// Advisory strength meter. The server enforces the real rules (8+ characters, a letter and a number).
+function Strength({ pw }) {
+  const score = (pw.length >= 8) + (pw.length >= 12) + (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) + /\d/.test(pw) + /[^A-Za-z0-9]/.test(pw);
+  const [label, color] = score <= 1 ? ['Weak', 'bg-red-500'] : score <= 3 ? ['Fair', 'bg-yellow-500'] : ['Strong', 'bg-green-500'];
+  return (
+    <div className="-mt-1 text-left" aria-live="polite">
+      <div className="flex gap-1">{[1, 2, 3, 4, 5].map((i) => <span key={i} className={`h-1.5 flex-1 rounded ${i <= score ? color : 'bg-slate-600'}`} />)}</div>
+      <p className="text-xs text-slate-400 mt-1">Password strength: <b>{label}</b></p>
+    </div>
+  );
+}
+
 function Field({ id, label, error, ...props }) {
   return (
     <div className="text-left">
@@ -38,11 +50,11 @@ function Field({ id, label, error, ...props }) {
   );
 }
 
-export default function Landing({ onUser, api }) {
+export default function Landing({ onUser, api, notice = '' }) {
   const [mode, setMode] = useState('login'); // 'login' | 'register'
   const [f, setF] = useState({ name: '', username: '', password: '', confirm: '' });
   const [errs, setErrs] = useState({});
-  const [formErr, setFormErr] = useState('');
+  const [formErr, setFormErr] = useState(notice);
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [music, setMusic] = useState(isPlaying());
@@ -66,7 +78,7 @@ export default function Landing({ onUser, api }) {
     setBusy(true);
     try {
       const r = await api('/api/' + (reg ? 'register' : 'login'), f);
-      onUser(r.name);
+      onUser(r);
     } catch (x) {
       if (x.fields) setErrs(x.fields); else setFormErr(x.message);
     } finally { setBusy(false); }
@@ -94,6 +106,7 @@ export default function Landing({ onUser, api }) {
         {reg && <Field id="name" label="Your name" placeholder="e.g. Ada Lovelace" autoComplete="name" value={f.name} onChange={set('name')} onBlur={blur('name')} error={errs.name} />}
         <Field id="username" label="Username" placeholder={reg ? '3-20 characters' : 'Username'} autoComplete="username" value={f.username} onChange={set('username')} onBlur={blur('username')} error={errs.username} />
         <Field id="password" label="Password" type={show ? 'text' : 'password'} placeholder={reg ? '8+ characters, a letter and a number' : 'Password'} autoComplete={reg ? 'new-password' : 'current-password'} value={f.password} onChange={set('password')} onBlur={blur('password')} error={errs.password} />
+        {reg && f.password && <Strength pw={f.password} />}
         {reg && <Field id="confirm" label="Confirm password" type={show ? 'text' : 'password'} placeholder="Type it again" autoComplete="new-password" value={f.confirm} onChange={set('confirm')} onBlur={blur('confirm')} error={errs.confirm} />}
         <label className="flex items-center gap-2 text-sm text-slate-300 self-start">
           <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show password
