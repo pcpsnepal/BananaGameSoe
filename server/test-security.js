@@ -8,7 +8,7 @@ import { makeAdmin } from './make-admin.js';
 import { csvCell } from './routes/admin.js';
 import { createLoginLimiter } from './security.js';
 
-const banana = { getPuzzle: async () => ({ image: 'data:image/png;base64,Z', solution: 7, source: 'live', latencyMs: 5 }), stats: () => ({}) };
+const banana = { getDigits: async (n) => ({ digits: Array(n).fill(7), source: 'live', latencyMs: 5 }), stats: () => ({}) };
 const quotes = { getQuote: async () => ({ text: 'q', author: 'a', source: 'local' }) };
 const acct = (name, username) => ({ name, username, password: 'secret123', confirm: 'secret123' });
 
@@ -44,7 +44,7 @@ const sameHost = { host: 'localhost:5173' };
 assert.equal((await web('POST', '/api/hint', {}, { 'x-csrf-token': token, origin: 'http://evil.example', ...sameHost })).code, 403);
 assert.equal((await web('POST', '/api/hint', {}, { 'x-csrf-token': token, origin: 'http://localhost:5173', ...sameHost })).code, 200);
 // dev setup: the web app (:5173) proxies to the API (:3001), so Origin and Host differ but the origin is on the allow-list
-assert.equal((await web('POST', '/api/hint', {}, { 'x-csrf-token': token, origin: 'http://localhost:5173', host: 'localhost:3001' })).code, 409); // passed the security check (hint already used)
+assert.notEqual((await web('POST', '/api/hint', {}, { 'x-csrf-token': token, origin: 'http://localhost:5173', host: 'localhost:3001' })).code, 403); // passed the security check
 assert.equal((await web('POST', '/api/hint', {}, { 'x-csrf-token': token, origin: 'http://localhost:5174', host: 'localhost:3001' })).code, 403); // other port: not allowed
 const lo = await web('POST', '/api/login', { username: 'ann', password: 'secret123' }, { 'x-csrf-token': token });
 assert.notEqual(lo.body.csrfToken, token); // new session, new token
@@ -73,7 +73,7 @@ await s('POST', '/api/register', acct('Sam Idle', 'sam'));
 assert.equal((await s('GET', '/api/me')).body.user, 'sam');
 await new Promise((r) => setTimeout(r, 400)); // idle past the limit
 assert.equal((await s('GET', '/api/me')).body.user, null);
-assert.equal((await s('GET', '/api/puzzle')).code, 401);
+assert.equal((await s('GET', '/api/round')).code, 401);
 
 // --- login lockout ---
 const lock = build({ banana, quotes, loginMaxFailures: 3 });

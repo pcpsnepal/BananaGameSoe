@@ -1,17 +1,18 @@
 // Client for the Banana API (https://marcconrad.com/uob/banana/doc.php): the only place that talks to it.
-// base64=yes: the API returns the PNG itself, so the browser never has to contact the third-party image host.
+// The game only needs each puzzle's solution digit (it becomes part of the secret code), so we use plain
+// out=json without images: the response is about 100 bytes instead of an embedded PNG.
 //
 // Resilience (all optional knobs):
 //  - timeout: give up on a slow request instead of hanging the game
-//  - validation: reject responses that are not a string image plus a digit 0-9
-//  - cache: remember recent puzzles and serve one when the live service fails
+//  - validation: reject responses whose solution is not a digit 0-9
+//  - cache: remember recent digits and use them when the live service fails
 //  - circuit breaker: after N failures in a row stop calling for a cooldown, serve the cache meanwhile
 //  - latency: round-trip time of the last live request
 import { timeoutFetch } from './http.js';
 
-const BANANA = 'https://marcconrad.com/uob/banana/api.php?out=json&base64=yes';
+const BANANA = 'https://marcconrad.com/uob/banana/api.php?out=json';
 
-export function createBananaClient({ timeoutMs = 5000, failureThreshold = 3, cooldownMs = 30000, cacheSize = 10, fetchImpl, now = Date.now } = {}) {
+export function createBananaClient({ timeoutMs = 5000, failureThreshold = 3, cooldownMs = 30000, cacheSize = 40, fetchImpl, now = Date.now } = {}) {
   const cache = [];
   let failures = 0;
   let openedAt = 0;
@@ -26,29 +27,36 @@ export function createBananaClient({ timeoutMs = 5000, failureThreshold = 3, coo
     if (!r.ok) throw new Error(`Banana API ${r.status}`);
     const p = await r.json();
     const solution = Number(p.solution);
-    if (typeof p.question !== 'string' || !p.question || !Number.isInteger(solution) || solution < 0 || solution > 9) throw new Error('Banana API sent an invalid puzzle');
+    if (p.solution === '' || p.solution == null || !Number.isInteger(solution) || solution < 0 || solution > 9) throw new Error('Banana API sent an invalid solution');
     lastLatencyMs = now() - start;
-    return { image: `data:image/png;base64,${p.question}`, solution };
+    return solution;
   }
 
-  // Returns { image, solution, source: 'live' | 'cache', latencyMs }. Throws only if the service is down and nothing is cached.
-  async function getPuzzle() {
+  // One digit: live if possible, otherwise a cached one.
+  async function oneDigit() {
     if (!isOpen()) {
       try {
-        const p = await live();
+        const digit = await live();
         failures = 0;
-        cache.push(p);
+        cache.push(digit);
         if (cache.length > cacheSize) cache.shift();
-        return { ...p, source: 'live', latencyMs: lastLatencyMs };
+        return { digit, source: 'live' };
       } catch {
         failures++;
         if (tripped()) openedAt = now();
       }
     }
-    if (cache.length) return { ...cache[Math.floor(Math.random() * cache.length)], source: 'cache', latencyMs: null };
-    throw new Error('Banana API unavailable and no cached puzzle');
+    if (cache.length) return { digit: cache[Math.floor(Math.random() * cache.length)], source: 'cache' };
+    throw new Error('Banana API unavailable and nothing cached');
   }
 
-  const stats = () => ({ circuit: isOpen() ? 'open' : tripped() ? 'half-open' : 'closed', failures, cachedPuzzles: cache.length, lastLatencyMs });
-  return { getPuzzle, stats };
+  // n digits fetched in parallel. Returns { digits, source: 'live' | 'cache' | 'mixed', latencyMs }.
+  async function getDigits(n) {
+    const parts = await Promise.all(Array.from({ length: n }, oneDigit));
+    const live = parts.filter((p) => p.source === 'live').length;
+    return { digits: parts.map((p) => p.digit), source: live === n ? 'live' : live === 0 ? 'cache' : 'mixed', latencyMs: lastLatencyMs };
+  }
+
+  const stats = () => ({ circuit: isOpen() ? 'open' : tripped() ? 'half-open' : 'closed', failures, cachedDigits: cache.length, lastLatencyMs });
+  return { getDigits, stats };
 }

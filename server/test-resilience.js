@@ -9,51 +9,63 @@ const keepAlive = setInterval(() => {}, 1000);
 
 let clock = 0;
 const now = () => clock;
+const solutionResponse = (solution) => async () => ({ ok: true, json: async () => ({ question: 'https://example.test/x.png', solution }) });
 
-// --- Banana client: live, validation, latency ---
+// --- Banana client: live digits, latency ---
 let calls = 0;
-const live = createBananaClient({ now, fetchImpl: async () => { calls++; clock += 42; return { ok: true, json: async () => ({ question: 'AAA', solution: 3 }) }; } });
-const p1 = await live.getPuzzle();
-assert.deepEqual([p1.source, p1.latencyMs, p1.solution, p1.image], ['live', 42, 3, 'data:image/png;base64,AAA']);
+const live = createBananaClient({ now, fetchImpl: async () => { const k = ++calls; clock += 42; return { ok: true, json: async () => ({ question: 'u', solution: k % 10 }) }; } });
+const d1 = await live.getDigits(4);
+assert.deepEqual([d1.digits, d1.source, d1.latencyMs, calls], [[1, 2, 3, 4], 'live', 42, 4]); // 4 requests, one per digit
+
+// the solution is a string in some responses: accepted when it is a digit
+assert.deepEqual((await createBananaClient({ fetchImpl: solutionResponse('7') }).getDigits(2)).digits, [7, 7]);
 
 // bad payloads are rejected, never trusted
-for (const bad of [{ question: 'x', solution: 12 }, { question: '', solution: 1 }, { solution: 1 }, { question: 'x', solution: 'abc' }]) {
-  const c = createBananaClient({ fetchImpl: async () => ({ ok: true, json: async () => bad }) });
-  await assert.rejects(c.getPuzzle(), /unavailable/);
+for (const bad of [12, -1, 1.5, 'abc', '', null, undefined]) {
+  const c = createBananaClient({ fetchImpl: solutionResponse(bad) });
+  await assert.rejects(c.getDigits(4), /unavailable/, `solution ${JSON.stringify(bad)}`);
 }
+await assert.rejects(createBananaClient({ fetchImpl: async () => ({ ok: false, status: 503 }) }).getDigits(1), /unavailable/);
 
 // --- timeout: a request that never answers must not hang ---
 const hang = createBananaClient({ timeoutMs: 30, fetchImpl: (url, { signal }) => new Promise((_, rej) => signal.addEventListener('abort', () => rej(signal.reason))) });
 const t0 = Date.now();
-await assert.rejects(hang.getPuzzle(), /unavailable/);
+await assert.rejects(hang.getDigits(4), /unavailable/);
 assert.ok(Date.now() - t0 < 1000, 'timed out quickly');
 
 // --- cache fallback + circuit breaker ---
 let up = true, fetches = 0;
 const flaky = createBananaClient({
   now, failureThreshold: 3, cooldownMs: 1000,
-  fetchImpl: async () => { fetches++; if (!up) throw new Error('down'); return { ok: true, json: async () => ({ question: 'CACHED', solution: 5 }) }; },
+  fetchImpl: async () => { fetches++; if (!up) throw new Error('down'); return { ok: true, json: async () => ({ question: 'u', solution: 5 }) }; },
 });
-await flaky.getPuzzle(); // fills the cache
+await flaky.getDigits(1); // fills the cache with a 5
 up = false;
-const f1 = await flaky.getPuzzle();
-assert.deepEqual([f1.source, f1.solution, f1.latencyMs], ['cache', 5, null]); // service down -> cached puzzle
-await flaky.getPuzzle(); await flaky.getPuzzle(); // 3 failures in a row: circuit opens
+const f1 = await flaky.getDigits(2);
+assert.deepEqual([f1.digits, f1.source], [[5, 5], 'cache']); // service down -> cached digits
+assert.equal(flaky.stats().circuit, 'closed'); // 2 failures so far
+await flaky.getDigits(1); // 3rd failure: circuit opens
 assert.equal(flaky.stats().circuit, 'open');
 const before = fetches;
-await flaky.getPuzzle(); await flaky.getPuzzle();
+await flaky.getDigits(4);
 assert.equal(fetches, before); // open circuit: no calls reach the failing service
 clock += 1001; // cooldown over -> half-open, one trial request
 assert.equal(flaky.stats().circuit, 'half-open');
-await flaky.getPuzzle();
+await flaky.getDigits(1);
 assert.equal(fetches, before + 1);
 assert.equal(flaky.stats().circuit, 'open'); // trial failed -> open again
 up = true; clock += 1001;
-assert.equal((await flaky.getPuzzle()).source, 'live'); // trial succeeds -> closed
+assert.equal((await flaky.getDigits(1)).source, 'live'); // trial succeeds -> closed
 assert.equal(flaky.stats().circuit, 'closed');
 
+// some digits live, some cached: reported as 'mixed'
+let n = 0;
+const half = createBananaClient({ failureThreshold: 99, fetchImpl: async () => { if (++n === 1) return { ok: true, json: async () => ({ question: 'u', solution: 3 }) }; if (n % 2 === 0) throw new Error('flaky'); return { ok: true, json: async () => ({ question: 'u', solution: 3 }) }; } });
+await half.getDigits(1);
+assert.equal((await half.getDigits(2)).source, 'mixed');
+
 // nothing cached and service down: error (the route turns it into a 502)
-await assert.rejects(createBananaClient({ fetchImpl: async () => { throw new Error('down'); } }).getPuzzle(), /no cached puzzle/);
+await assert.rejects(createBananaClient({ fetchImpl: async () => { throw new Error('down'); } }).getDigits(4), /nothing cached/);
 
 // --- quotes: live, 60s cache, local fallback ---
 let qc = 0, qt = 0;
@@ -68,7 +80,7 @@ assert.equal(qc, 2); // cache expired
 for (const fetchImpl of [
   async () => { throw new Error('offline'); },
   async () => ({ ok: false, status: 429 }),
-  async () => ({ ok: true, json: async () => [{ q: 'Too many requests', a: 'zenquotes.io', h: '' }, 'junk'][1] }), // malformed
+  async () => ({ ok: true, json: async () => 'junk' }),
   async () => ({ ok: true, json: async () => ({ not: 'an array' }) }),
 ]) {
   const fq = await createQuoteClient({ fetchImpl }).getQuote();
@@ -77,7 +89,7 @@ for (const fetchImpl of [
 }
 
 // --- app integration: injected services, quote on game over, public API ---
-const fakeBanana = { getPuzzle: async () => ({ image: 'data:image/png;base64,Z', solution: 7, source: 'cache', latencyMs: null }), stats: () => ({ circuit: 'closed', failures: 0, cachedPuzzles: 1, lastLatencyMs: 9 }) };
+const fakeBanana = { getDigits: async (k) => ({ digits: Array(k).fill(7), source: 'cache', latencyMs: null }), stats: () => ({ circuit: 'closed', failures: 0, cachedDigits: 1, lastLatencyMs: 9 }) };
 const fakeQuotes = { getQuote: async () => ({ text: 'Hi', author: 'Me', source: 'local' }) };
 const app = build({ banana: fakeBanana, quotes: fakeQuotes });
 let cookie = '', csrf = '';
@@ -90,11 +102,16 @@ const call = async (method, url, payload) => {
 };
 await call('POST', '/api/register', { name: 'Ann Lee', username: 'ann', password: 'secret123', confirm: 'secret123' });
 const g = await call('POST', '/api/game', { difficulty: 'easy' });
-assert.deepEqual(g.body.api, { source: 'cache', latencyMs: null }); // browser is told where the puzzle came from
-assert.ok(!('solution' in g.body));
-await call('POST', '/api/answer', { digit: 7 }); // correct: no quote mid-game
+assert.deepEqual(g.body.api, { source: 'cache', latencyMs: null }); // the browser is told where the code came from
+assert.ok(!('secret' in g.body));
+const solved = (await call('POST', '/api/guess', { guess: [7, 7, 7, 7] })).body; // solved: no quote mid-game
+assert.equal(solved.solved, true);
+assert.ok(!('quote' in solved));
 let last;
-for (let i = 0; i < 3; i++) { await call('GET', '/api/puzzle'); last = await call('POST', '/api/answer', { digit: 1 }); }
+for (let round = 0; round < 3; round++) {
+  await call('GET', '/api/round');
+  do { last = await call('POST', '/api/guess', { guess: [1, 1, 1, 1] }); } while (!last.body.done);
+}
 assert.equal(last.body.over, true);
 assert.deepEqual(last.body.quote, { text: 'Hi', author: 'Me', source: 'local' });
 
@@ -105,11 +122,10 @@ assert.equal(pub.headers['access-control-allow-origin'], '*');
 assert.equal(scores.status, 'success');
 assert.deepEqual(Object.keys(scores.data[0]).sort(), ['avatar', 'best_score', 'games_played', 'player', 'rank', 'total_score']);
 assert.deepEqual([scores.data[0].rank, scores.data[0].player, scores.data[0].games_played], [1, 'Ann Lee', 1]);
-const raw = pub.body;
-assert.ok(!/hash|password|\$2a|"ann"|session/i.test(raw), 'no sensitive data in public API');
+assert.ok(!/hash|password|\$2a|"ann"|session|secret/i.test(pub.body), 'no sensitive data in public API');
 const st = (await app.inject({ method: 'GET', url: '/api/v1/status' })).json();
 assert.equal(st.data.banana_api.circuit, 'closed');
-assert.equal((await app.inject({ method: 'GET', url: '/api/leaderboard' })).statusCode, 401); // internal one stays private
+assert.equal((await app.inject({ method: 'GET', url: '/api/leaderboard' })).statusCode, 401); // the internal one stays private
 
 console.log('resilience ok');
 await app.close();
