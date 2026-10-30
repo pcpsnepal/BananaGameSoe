@@ -92,7 +92,7 @@ export default function Landing({ onUser, api, notice = '' }) {
         {music ? '🔊 Music on' : '🔇 Music off'}
       </button>
       <Banana className="float w-40 h-40 drop-shadow-xl" />
-      <p className="text-lg text-amber-100">Six equations, one hidden banana. Find the missing digit before the clock runs out!</p>
+      <p className="text-lg text-amber-100">Crack the secret banana code before the clock runs out!</p>
       <ul className="flex flex-wrap justify-center gap-2 text-sm">
         {['⏱ Beat the clock', '🔥 Streak bonuses', '🏆 Live leaderboard'].map((t) => (
           <li key={t} className="rounded-full bg-white/10 px-3 py-1">{t}</li>

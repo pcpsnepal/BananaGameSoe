@@ -5,6 +5,7 @@
 // Events used in the app:
 //   puzzle:completed  { correct, timedOut, points, score, lives, streak, over, ... }  an answer (or timeout) was settled
 //   game:over         same detail as above                                            the last life was lost
+//   guess:submitted   { exact, partial, attemptsLeft }                                a guess was scored, the code is still open
 //   time:warning      { seconds }                                                     5 seconds left on the clock
 //   powerup:used      { type: 'hint' | 'skip' }
 //   badge:earned      { id, name, desc }                                              an answer earned a badge
