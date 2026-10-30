@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import Landing from './Landing.jsx';
+import { emit, on } from './events.js';
+import { subscribeFeedback } from './feedback.js';
+import { isMuted, setMuted } from './sound.js';
 
 let csrf = null; // CSRF token from the server (login/register/me); sent back on every state-changing request
 const api = async (url, body) => {
-  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json', ...(csrf && { 'X-CSRF-Token': csrf }) }, body: JSON.stringify(body) } : undefined);
-  const j = await r.json();
+  let r;
+  try {
+    r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json', ...(csrf && { 'X-CSRF-Token': csrf }) }, body: JSON.stringify(body) } : undefined);
+  } catch {
+    throw new Error('Cannot reach the server. Check your connection and try again.'); // network failure
+  }
+  const j = await r.json().catch(() => ({})); // a proxy error page is not JSON
   if (j?.csrfToken !== undefined) csrf = j.csrfToken;
-  // A 401 on a protected route means the session ended (e.g. 15 min idle): tell the rest of the app with a custom event.
-  if (r.status === 401 && !/^\/api\/(login|register|me)/.test(url)) window.dispatchEvent(new CustomEvent('session:expired'));
-  if (!r.ok) throw Object.assign(new Error(j.error || j.message), { fields: j.fields, status: r.status });
+  // A 401 on a protected route means the session ended (e.g. 15 min idle): publish an event for the rest of the app.
+  if (r.status === 401 && !/^\/api\/(login|register|me)/.test(url)) emit('session:expired');
+  if (!r.ok) throw Object.assign(new Error(j.error || j.message || `Request failed (${r.status})`), { fields: j.fields, status: r.status });
   return j;
 };
 
@@ -18,10 +26,10 @@ const LEVELS = [
   { id: 'hard', name: 'Hard', desc: '15 seconds per puzzle', mult: '×3', style: 'bg-red-600 hover:bg-red-500' },
 ];
 
-function Leaderboard({ rows }) {
+function Leaderboard({ rows, live }) {
   return (
     <section className="rounded-lg bg-slate-800 p-4">
-      <h2 className="font-bold mb-2">🏆 Leaderboard <span className="text-xs text-slate-400">(live)</span></h2>
+      <h2 className="font-bold mb-2">🏆 Leaderboard <span className={`text-xs ${live ? 'text-slate-400' : 'text-amber-400'}`}>{live ? '(live)' : '(reconnecting…)'}</span></h2>
       {rows.length === 0 && <p className="text-slate-400 text-sm">No scores yet.</p>}
       <ol className="space-y-1">
         {rows.map((r, i) => <li key={i} className="flex justify-between"><span>{i + 1}. {r.user}</span><b>{r.score}</b></li>)}
@@ -73,9 +81,25 @@ function Game() {
   const [err, setErr] = useState('');
   const [rows, setRows] = useState([]);
   const [feed, setFeed] = useState([]);
+  const [live, setLive] = useState(true); // is the event stream connected?
+  const [flash, setFlash] = useState(''); // '', 'correct', 'wrong' or 'timeout': drives the answer animation
+  const [loaded, setLoaded] = useState(false); // has the puzzle image finished loading?
   const fail = (e) => setErr(e.message);
 
-  const enter = useCallback((p) => { setPuzzle(p); setFb(null); setLeft(null); setErr(''); setPhase('play'); }, []);
+  // An answer was settled: update the screen and publish events. Sound is a separate subscriber (feedback.js).
+  const settled = useCallback((r) => {
+    setFb(r);
+    emit('puzzle:completed', r);
+    if (r.over) emit('game:over', r);
+  }, []);
+
+  // Visual feedback is just another subscriber of the same event.
+  useEffect(() => on('puzzle:completed', (r) => {
+    setFlash(r.correct ? 'correct' : r.timedOut ? 'timeout' : 'wrong');
+    setTimeout(() => setFlash(''), 800);
+  }), []);
+
+  const enter = useCallback((p) => { setPuzzle(p); setFb(null); setLeft(null); setErr(''); setLoaded(false); setPhase('play'); }, []);
   const toMenu = () => { setPuzzle(null); setFb(null); setErr(''); setPhase('menu'); };
 
   useEffect(() => {
@@ -84,6 +108,8 @@ function Game() {
       .catch((e) => (e.status === 409 ? setPhase('menu') : (setErr(e.message), setPhase('menu'))));
     api('/api/leaderboard').then(setRows).catch(() => {});
     const es = new EventSource('/api/events'); // server push: leaderboard + activity update live
+    es.onopen = () => setLive(true);
+    es.onerror = () => setLive(false); // the browser retries by itself
     es.addEventListener('leaderboard', (e) => setRows(JSON.parse(e.data)));
     es.addEventListener('activity', (e) => setFeed((f) => [JSON.parse(e.data).text, ...f].slice(0, 5)));
     return () => es.close();
@@ -93,15 +119,17 @@ function Game() {
   useEffect(() => {
     if (!puzzle || fb) return;
     const end = Date.now() + puzzle.seconds * 1000;
+    let warned = false;
     const t = setInterval(() => {
       const s = Math.ceil((end - Date.now()) / 1000);
       setLeft(Math.max(s, 0));
-      if (s <= 0) { clearInterval(t); api('/api/answer', { timeout: true }).then(setFb).catch(fail); }
+      if (s <= 5 && s > 0 && !warned) { warned = true; emit('time:warning', { seconds: s }); }
+      if (s <= 0) { clearInterval(t); api('/api/answer', { timeout: true }).then(settled).catch(fail); }
     }, 250);
     return () => clearInterval(t);
-  }, [puzzle, fb]);
+  }, [puzzle, fb, settled]);
 
-  const answer = useCallback((digit) => { if (puzzle && !fb) api('/api/answer', { digit }).then(setFb).catch(fail); }, [puzzle, fb]);
+  const answer = useCallback((digit) => { if (puzzle && !fb) api('/api/answer', { digit }).then(settled).catch(fail); }, [puzzle, fb, settled]);
 
   // keyboard: press 0-9 to answer
   useEffect(() => {
@@ -112,8 +140,8 @@ function Game() {
 
   const start = (difficulty) => { setErr(''); api('/api/game', { difficulty }).then(enter).catch(fail); };
   const next = () => (fb.over ? toMenu() : api('/api/puzzle').then(enter).catch(fail));
-  const hint = () => api('/api/hint', {}).then((r) => setPuzzle((p) => ({ ...p, removed: r.removed, hints: r.hints }))).catch(fail);
-  const skip = () => api('/api/skip', {}).then(enter).catch(fail);
+  const hint = () => api('/api/hint', {}).then((r) => { emit('powerup:used', { type: 'hint' }); setPuzzle((p) => ({ ...p, removed: r.removed, hints: r.hints })); }).catch(fail);
+  const skip = () => api('/api/skip', {}).then((p) => { emit('powerup:used', { type: 'skip' }); enter(p); }).catch(fail);
 
   if (phase === 'loading') return null;
 
@@ -136,13 +164,16 @@ function Game() {
           {puzzle && !fb && (
             <div className="w-full max-w-xs" role="timer" aria-live="off">
               <div className="h-2 rounded bg-slate-700 overflow-hidden">
-                <div className={`h-full transition-all duration-300 ${secs <= 5 ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${(secs / puzzle.total) * 100}%` }} />
+                <div className={`h-full transition-all duration-300 ${secs <= 5 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} style={{ width: `${(secs / puzzle.total) * 100}%` }} />
               </div>
-              <p className="text-center text-sm text-slate-300 mt-1">⏱ {secs}s</p>
+              <p className={`text-center text-sm mt-1 ${secs <= 5 ? 'text-red-400 font-bold' : 'text-slate-300'}`}>⏱ {secs}s</p>
             </div>
           )}
 
-          {puzzle && <img src={puzzle.image} alt="Banana puzzle: what digit replaces the banana?" className="rounded-lg bg-white max-w-full" />}
+          {puzzle && (
+            <img src={puzzle.image} onLoad={() => setLoaded(true)} alt="Banana puzzle: what digit replaces the banana?"
+              className={`rounded-lg bg-white max-w-full transition-opacity duration-500 ${loaded ? 'opacity-100' : 'opacity-0'} ${flash && `flash-${flash}`}`} />
+          )}
           {puzzle?.api && (
             <p className="text-xs text-slate-500" title="Round-trip time of our server's request to the Banana API">
               Banana API: {puzzle.api.source === 'live' ? `${puzzle.api.latencyMs} ms` : 'cached puzzle (service unreachable)'}
@@ -168,7 +199,7 @@ function Game() {
             </>
           ) : (
             <div className="text-center">
-              <p className="text-xl font-semibold">
+              <p className={`text-xl font-semibold ${fb.correct ? 'text-green-400' : fb.timedOut ? 'text-amber-400' : 'text-red-400'}`} role="status">
                 {fb.correct ? `✅ Correct! +${fb.points} pts` : fb.timedOut ? `⏰ Time's up! It was ${fb.solution}` : `❌ Wrong, it was ${fb.solution}`}
               </p>
               {fb.over && <p className="mt-1 text-slate-300">Game over: <b>{fb.score}</b> points, best streak <b>{fb.bestStreak}</b></p>}
@@ -191,7 +222,7 @@ function Game() {
         </>
       )}
       <div className="w-full max-w-xs flex flex-col gap-3">
-        <Leaderboard rows={rows} />
+        <Leaderboard rows={rows} live={live} />
         <Activity items={feed} />
       </div>
     </div>
@@ -234,10 +265,11 @@ export default function App() {
   const [view, setView] = useState('game'); // game | admin
   useEffect(() => { api('/api/me').then((r) => setMe(r.user ? r : null)); }, []);
   useEffect(() => {
-    const h = () => { setMe(null); setView('game'); setNotice('Your session expired. Please log in again.'); };
-    window.addEventListener('session:expired', h);
-    return () => window.removeEventListener('session:expired', h);
+    return on('session:expired', () => { setMe(null); setView('game'); setNotice('Your session expired. Please log in again.'); });
   }, []);
+  useEffect(() => subscribeFeedback(), []); // sound effects subscribe to game events
+  const [muted, setMutedState] = useState(isMuted());
+  const toggleSound = () => { setMuted(!muted); setMutedState(!muted); };
   const logout = () => api('/api/logout', {}).then(() => { csrf = null; setMe(null); setView('game'); setNotice(''); });
   const user = me?.name;
 
@@ -249,6 +281,7 @@ export default function App() {
           <p className="text-sm text-slate-400">
             Playing as <b className="text-slate-100">{user}</b>
             {me.role === 'admin' && <> · <button onClick={() => setView(view === 'admin' ? 'game' : 'admin')} className="underline">{view === 'admin' ? 'back to game' : 'admin'}</button></>}
+            {' '}· <button onClick={toggleSound} aria-pressed={!muted} className="underline">{muted ? '🔇 sound off' : '🔊 sound on'}</button>
             {' '}· <button onClick={logout} className="underline">log out</button>
           </p>
           {view === 'admin' && me.role === 'admin' ? <Admin /> : <Game />}
