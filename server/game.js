@@ -19,6 +19,7 @@ export function createGame({ timeLimitMs, bus }) {
     const next = { ...g, lives: g.lives - (correct ? 0 : 1), score: g.score + points, streak, bestStreak: Math.max(g.bestStreak, streak), solution: null };
     const over = next.lives <= 0;
     bus.emit('score', { user, score: next.score });
+    bus.emit('answer', { user, correct, elapsedMs: Date.now() - g.issuedAt, streak });
     if (over) bus.emit('game:over', { user, score: next.score, difficulty: g.difficulty });
     else if (correct && streak % 5 === 0) bus.emit('streak', { user, streak });
     return { next, result: { correct, timedOut, solution: g.solution, points, score: next.score, lives: next.lives, streak, bestStreak: next.bestStreak, over } };

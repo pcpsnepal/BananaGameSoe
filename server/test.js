@@ -77,7 +77,7 @@ await call('GET', '/api/puzzle');
 const over = (await call('POST', '/api/answer', { digit: 1 })).body;
 assert.deepEqual([over.lives, over.over], [0, true]);
 assert.equal((await call('GET', '/api/puzzle')).code, 409); // finished game is cleared
-assert.deepEqual((await call('GET', '/api/leaderboard')).body, [{ user: 'Ann Lee', score: over.score }]);
+assert.deepEqual((await call('GET', '/api/leaderboard')).body, [{ user: 'Ann Lee', avatar: '🍌', score: over.score }]);
 
 // --- timer (50ms limit): a late but correct answer is a timeout ---
 const slow = build({ timeLimitMs: 50 });

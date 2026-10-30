@@ -2,6 +2,7 @@
 import bcrypt from 'bcryptjs';
 import { validateRegistration } from '../validation.js';
 import { newCsrfToken } from '../security.js';
+import { DEFAULT_AVATAR } from '../profile.js';
 
 // preHandler for routes that need a logged-in user. The user comes from the server-side session, never from the request body.
 export const requireLogin = async (req, reply) => {
@@ -21,7 +22,7 @@ const clean = (s) => String(s).replace(/[^\w.@-]/g, '?').slice(0, 20); // safe t
 
 export function authRoutes(app, { store, limiter }) {
   const { users, save } = store;
-  const identity = (req, key) => ({ user: key, name: users.get(key).name, role: store.roleOf(key), csrfToken: req.session.csrf });
+  const identity = (req, key) => ({ user: key, name: users.get(key).name, avatar: store.avatarOf(key), role: store.roleOf(key), csrfToken: req.session.csrf });
 
   app.post('/api/register', async (req, reply) => {
     const fields = validateRegistration(req.body);
@@ -29,7 +30,7 @@ export function authRoutes(app, { store, limiter }) {
     if (!fields.username && users.has(key)) fields.username = 'That username is taken';
     if (Object.keys(fields).length) return reply.code(Object.values(fields).includes('That username is taken') ? 409 : 400).send({ error: Object.values(fields)[0], fields });
     const { name, username, password } = req.body;
-    users.set(key, { username: username.trim(), name: name.trim(), hash: await bcrypt.hash(password, 10), role: 'player' });
+    users.set(key, { username: username.trim(), name: name.trim(), hash: await bcrypt.hash(password, 10), role: 'player', avatar: DEFAULT_AVATAR });
     save();
     await req.session.regenerate();
     req.session.user = key;

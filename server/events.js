@@ -1,6 +1,7 @@
 // Event bus (publish/subscribe) plus the Server-Sent Events hub that pushes updates to browsers.
 // Publishers (game logic) emit events; the subscribers below decide what to do. They do not know about each other.
 import { EventEmitter } from 'node:events';
+import { applyAnswer, applyGameOver, newStats, BADGES } from './profile.js';
 
 export function createEvents(store) {
   const bus = new EventEmitter();
@@ -17,11 +18,15 @@ export function createEvents(store) {
     store.save();
     broadcast('leaderboard', store.top());
   });
-  bus.on('game:over', ({ user, score }) => {
-    const s = store.stats.get(user) ?? { games: 0, total: 0 };
-    store.stats.set(user, { games: s.games + 1, total: s.total + score });
+  // Statistics and badges: update, save, and announce any badge that was just earned.
+  const commit = (user, { stats, earned }) => {
+    store.stats.set(user, stats);
     store.save();
-  });
+    earned.forEach((badge) => bus.emit('badge', { user, badge }));
+  };
+  bus.on('answer', ({ user, ...a }) => commit(user, applyAnswer(store.stats.get(user) ?? newStats(), a)));
+  bus.on('game:over', ({ user, score }) => commit(user, applyGameOver(store.stats.get(user) ?? newStats(), score)));
+  bus.on('badge', ({ user, badge }) => broadcast('activity', { text: `🏅 ${store.nameOf(user)} earned ${BADGES[badge].name}` }));
   bus.on('game:over', ({ user, score, difficulty }) => broadcast('activity', { text: `${store.nameOf(user)} finished a ${difficulty} game with ${score} pts` }));
   bus.on('streak', ({ user, streak }) => broadcast('activity', { text: `🔥 ${store.nameOf(user)} is on a ${streak}-answer streak` }));
 

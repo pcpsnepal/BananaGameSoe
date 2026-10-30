@@ -103,7 +103,7 @@ const pub = await app.inject({ method: 'GET', url: '/api/v1/scores' });
 const scores = pub.json();
 assert.equal(pub.headers['access-control-allow-origin'], '*');
 assert.equal(scores.status, 'success');
-assert.deepEqual(Object.keys(scores.data[0]).sort(), ['best_score', 'games_played', 'player', 'rank', 'total_score']);
+assert.deepEqual(Object.keys(scores.data[0]).sort(), ['avatar', 'best_score', 'games_played', 'player', 'rank', 'total_score']);
 assert.deepEqual([scores.data[0].rank, scores.data[0].player, scores.data[0].games_played], [1, 'Ann Lee', 1]);
 const raw = pub.body;
 assert.ok(!/hash|password|\$2a|"ann"|session/i.test(raw), 'no sensitive data in public API');
