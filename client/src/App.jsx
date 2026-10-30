@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import Landing from './Landing.jsx';
 
+let csrf = null; // CSRF token from the server (login/register/me); sent back on every state-changing request
 const api = async (url, body) => {
-  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json', ...(csrf && { 'X-CSRF-Token': csrf }) }, body: JSON.stringify(body) } : undefined);
   const j = await r.json();
+  if (j?.csrfToken !== undefined) csrf = j.csrfToken;
+  // A 401 on a protected route means the session ended (e.g. 15 min idle): tell the rest of the app with a custom event.
+  if (r.status === 401 && !/^\/api\/(login|register|me)/.test(url)) window.dispatchEvent(new CustomEvent('session:expired'));
   if (!r.ok) throw Object.assign(new Error(j.error || j.message), { fields: j.fields, status: r.status });
   return j;
 };
@@ -194,20 +198,62 @@ function Game() {
   );
 }
 
+function Admin() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => { api('/api/admin/players').then(setData).catch((e) => setErr(e.message)); }, []);
+  if (err) return <p className="text-red-400" role="alert">{err}</p>;
+  if (!data) return null;
+  const th = 'px-2 py-1 text-left font-semibold';
+  return (
+    <div className="w-full max-w-2xl flex flex-col gap-4 text-sm">
+      <section className="rounded-lg bg-slate-800 p-4 overflow-x-auto">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="font-bold">👥 Players</h2>
+          <a className="rounded bg-indigo-600 px-3 py-1 font-semibold hover:bg-indigo-500" href="/api/admin/export.csv">⬇ Export CSV</a>
+        </div>
+        <table className="w-full"><thead><tr className="text-slate-400"><th className={th}>Name</th><th className={th}>Role</th><th className={th}>Best</th><th className={th}>Games</th><th className={th}>Last login</th></tr></thead>
+          <tbody>{data.players.map((p) => (
+            <tr key={p.username} className="border-t border-slate-700"><td className="px-2 py-1">{p.name} <span className="text-slate-500">@{p.username}</span></td><td className="px-2 py-1">{p.role}</td><td className="px-2 py-1">{p.best_score}</td><td className="px-2 py-1">{p.games_played}</td><td className="px-2 py-1">{p.last_login ? new Date(p.last_login).toLocaleString() : '-'}</td></tr>
+          ))}</tbody></table>
+      </section>
+      <section className="rounded-lg bg-slate-800 p-4 overflow-x-auto">
+        <h2 className="font-bold mb-2">🔐 Recent logins</h2>
+        <table className="w-full"><thead><tr className="text-slate-400"><th className={th}>When</th><th className={th}>User</th><th className={th}>Result</th><th className={th}>IP</th></tr></thead>
+          <tbody>{data.history.map((h, i) => (
+            <tr key={i} className="border-t border-slate-700"><td className="px-2 py-1">{new Date(h.at).toLocaleString()}</td><td className="px-2 py-1">{h.username}</td><td className={`px-2 py-1 ${h.success ? 'text-green-400' : 'text-red-400'}`}>{h.success ? 'ok' : h.note ?? 'failed'}</td><td className="px-2 py-1">{h.ip}</td></tr>
+          ))}</tbody></table>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
-  const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
-  useEffect(() => { api('/api/me').then((r) => setUser(r.name)); }, []);
-  const logout = () => api('/api/logout', {}).then(() => setUser(null));
+  const [me, setMe] = useState(undefined); // undefined = loading, null = logged out, else { name, role }
+  const [notice, setNotice] = useState('');
+  const [view, setView] = useState('game'); // game | admin
+  useEffect(() => { api('/api/me').then((r) => setMe(r.user ? r : null)); }, []);
+  useEffect(() => {
+    const h = () => { setMe(null); setView('game'); setNotice('Your session expired. Please log in again.'); };
+    window.addEventListener('session:expired', h);
+    return () => window.removeEventListener('session:expired', h);
+  }, []);
+  const logout = () => api('/api/logout', {}).then(() => { csrf = null; setMe(null); setView('game'); setNotice(''); });
+  const user = me?.name;
 
   return (
     <main className={`min-h-screen text-slate-100 flex flex-col items-center gap-4 p-4 ${user ? 'bg-slate-900' : 'bg-gradient-to-b from-amber-800 via-slate-900 to-slate-900'}`}>
       <h1 className="text-3xl font-extrabold tracking-wide">🍌 BANANA GAME</h1>
-      {user === undefined ? null : user ? (
+      {me === undefined ? null : me ? (
         <>
-          <p className="text-sm text-slate-400">Playing as <b className="text-slate-100">{user}</b> · <button onClick={logout} className="underline">log out</button></p>
-          <Game />
+          <p className="text-sm text-slate-400">
+            Playing as <b className="text-slate-100">{user}</b>
+            {me.role === 'admin' && <> · <button onClick={() => setView(view === 'admin' ? 'game' : 'admin')} className="underline">{view === 'admin' ? 'back to game' : 'admin'}</button></>}
+            {' '}· <button onClick={logout} className="underline">log out</button>
+          </p>
+          {view === 'admin' && me.role === 'admin' ? <Admin /> : <Game />}
         </>
-      ) : <Landing onUser={setUser} api={api} />}
+      ) : <Landing onUser={(r) => { setNotice(''); setMe(r); }} api={api} notice={notice} />}
     </main>
   );
 }

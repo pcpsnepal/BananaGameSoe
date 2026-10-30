@@ -80,11 +80,13 @@ for (const fetchImpl of [
 const fakeBanana = { getPuzzle: async () => ({ image: 'data:image/png;base64,Z', solution: 7, source: 'cache', latencyMs: null }), stats: () => ({ circuit: 'closed', failures: 0, cachedPuzzles: 1, lastLatencyMs: 9 }) };
 const fakeQuotes = { getQuote: async () => ({ text: 'Hi', author: 'Me', source: 'local' }) };
 const app = build({ banana: fakeBanana, quotes: fakeQuotes });
-let cookie = '';
+let cookie = '', csrf = '';
 const call = async (method, url, payload) => {
-  const res = await app.inject({ method, url, payload, headers: { cookie } });
+  const res = await app.inject({ method, url, payload, headers: { cookie, 'x-csrf-token': csrf } });
   const c = res.cookies.at(-1); if (c) cookie = `${c.name}=${c.value}`;
-  return { code: res.statusCode, body: res.json(), headers: res.headers };
+  const body = res.json();
+  if (body?.csrfToken) csrf = body.csrfToken;
+  return { code: res.statusCode, body, headers: res.headers };
 };
 await call('POST', '/api/register', { name: 'Ann Lee', username: 'ann', password: 'secret123', confirm: 'secret123' });
 const g = await call('POST', '/api/game', { difficulty: 'easy' });

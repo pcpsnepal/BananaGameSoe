@@ -8,14 +8,16 @@ import { build, validateRegistration } from './app.js';
 let fetches = 0;
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ question: `IMG${++fetches}`, solution: 7 }) });
 
-// each client keeps its own cookie jar
+// each client keeps its own cookie jar and, like the real browser app, sends back the CSRF token it was given
 function client(app) {
-  let cookie = '';
+  let cookie = '', csrf = '';
   return async (method, url, payload) => {
-    const res = await app.inject({ method, url, payload, headers: { cookie } });
+    const res = await app.inject({ method, url, payload, headers: { cookie, 'x-csrf-token': csrf } });
     const c = res.cookies.at(-1);
     if (c) cookie = `${c.name}=${c.value}`;
-    return { code: res.statusCode, body: res.json() };
+    const body = res.json();
+    if (body?.csrfToken) csrf = body.csrfToken;
+    return { code: res.statusCode, body };
   };
 }
 const acct = (name, username) => ({ name, username, password: 'secret123', confirm: 'secret123' });

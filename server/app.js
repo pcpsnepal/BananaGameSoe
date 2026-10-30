@@ -3,7 +3,8 @@
 //   store.js         accounts + best scores          events.js        pub/sub bus + Server-Sent Events
 //   game.js          timing and scoring rules        services/banana  Banana API client (timeout, cache, circuit breaker)
 //                                                    services/quotes  ZenQuotes client (timeout, cache, local fallback)
-//   routes/auth.js   virtual identity (bcrypt + session cookie)
+//   routes/auth.js   virtual identity (bcrypt, session cookie, roles)   security.js  CSRF, origin check, headers, login limiter
+//   routes/admin.js  admin-only: players, login history, CSV export
 //   routes/game.js   game endpoints                  routes/public.js leaderboard, event stream, public /api/v1
 // The Banana API call pattern follows the public docs; everything else was written with LLM help (Claude).
 import Fastify from 'fastify';
@@ -14,14 +15,23 @@ import { createEvents } from './events.js';
 import { createGame } from './game.js';
 import { createBananaClient } from './services/banana.js';
 import { createQuoteClient } from './services/quotes.js';
+import { registerSecurity, createLoginLimiter } from './security.js';
 import { authRoutes } from './routes/auth.js';
+import { adminRoutes } from './routes/admin.js';
 import { gameRoutes } from './routes/game.js';
 import { publicRoutes } from './routes/public.js';
 
 export { validateRegistration } from './validation.js';
 
 // banana / quotes can be injected (tests do) so external services are never needed to run the suite.
-export function build({ timeLimitMs = 30000, dataFile = null, banana = createBananaClient(), quotes = createQuoteClient() } = {}) {
+export function build({
+  timeLimitMs = 30000, dataFile = null, banana = createBananaClient(), quotes = createQuoteClient(),
+  sessionTtlMs = 15 * 60 * 1000, // inactivity timeout: the cookie is renewed on every response, so it expires after 15 idle minutes
+  secureCookies = process.env.NODE_ENV === 'production', // Secure cookies need HTTPS
+  loginMaxFailures = 5, loginWindowMs = 5 * 60 * 1000,
+  // Where the web app is served from when that differs from the API (the Vite dev server). Set ALLOWED_ORIGINS in production.
+  allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173').split(','),
+} = {}) {
   const app = Fastify();
   const store = createStore(dataFile);
   const events = createEvents(store);
@@ -30,11 +40,13 @@ export function build({ timeLimitMs = 30000, dataFile = null, banana = createBan
   app.register(cookie);
   app.register(session, {
     secret: process.env.SESSION_SECRET || 'dev-only-secret-change-me-it-must-be-32+chars',
-    cookie: { secure: false, httpOnly: true, sameSite: 'lax' }, // secure:true behind HTTPS in production
+    cookie: { secure: secureCookies, httpOnly: true, sameSite: 'lax', maxAge: sessionTtlMs },
     saveUninitialized: false,
   });
 
-  authRoutes(app, { store });
+  registerSecurity(app, { allowedOrigins });
+  authRoutes(app, { store, limiter: createLoginLimiter({ max: loginMaxFailures, windowMs: loginWindowMs }) });
+  adminRoutes(app, { store });
   gameRoutes(app, { game, getPuzzle: banana.getPuzzle, getQuote: quotes.getQuote });
   publicRoutes(app, { store, events, banana });
 
