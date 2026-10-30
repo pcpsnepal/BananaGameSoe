@@ -21,9 +21,9 @@ const api = async (url, body) => {
 };
 
 const LEVELS = [
-  { id: 'easy', name: 'Easy', desc: '45 seconds per puzzle', mult: '×1', style: 'bg-green-600 hover:bg-green-500' },
-  { id: 'normal', name: 'Normal', desc: '30 seconds per puzzle', mult: '×2', style: 'bg-yellow-500 text-slate-900 hover:bg-yellow-400' },
-  { id: 'hard', name: 'Hard', desc: '15 seconds per puzzle', mult: '×3', style: 'bg-red-600 hover:bg-red-500' },
+  { id: 'easy', name: 'Easy', desc: '10 guesses · 3 minutes per code', mult: '×1', style: 'bg-green-600 hover:bg-green-500' },
+  { id: 'normal', name: 'Normal', desc: '8 guesses · 2 minutes per code', mult: '×2', style: 'bg-yellow-500 text-slate-900 hover:bg-yellow-400' },
+  { id: 'hard', name: 'Hard', desc: '6 guesses · 90 seconds per code', mult: '×3', style: 'bg-red-600 hover:bg-red-500' },
 ];
 
 function Leaderboard({ rows, live }) {
@@ -53,7 +53,7 @@ function Activity({ items }) {
 function Menu({ onStart, err }) {
   return (
     <div className="flex flex-col items-center gap-4 w-full max-w-xs">
-      <p className="text-slate-300 text-center">Find the digit hidden behind the banana to complete the equations.</p>
+      <p className="text-slate-300 text-center">Crack the secret 4-digit code. Its digits come from the Banana API.</p>
       <div className="w-full flex flex-col gap-2">
         {LEVELS.map((l) => (
           <button key={l.id} onClick={() => onStart(l.id)} className={`rounded-xl px-4 py-3 text-left font-bold flex justify-between items-center ${l.style}`}>
@@ -64,32 +64,51 @@ function Menu({ onStart, err }) {
       </div>
       <p className="h-5 text-red-400 text-sm" role="alert">{err}</p>
       <ul className="text-sm text-slate-400 space-y-1 list-disc pl-5">
-        <li>Faster answers score more: (10 + seconds left) × level.</li>
-        <li>Each correct answer in a row adds +25% (up to +100%).</li>
-        <li>3 lives. A wrong answer or timeout costs one.</li>
-        <li>Power-ups: 50/50 ×2 (halves that puzzle's points), Skip ×1 (free).</li>
+        <li>Type 4 digits and press Enter. Each guess gets pegs: <Pegs exact={1} partial={0} /> right digit, right place; <Pegs exact={0} partial={1} /> right digit, wrong place.</li>
+        <li>Fewer guesses and more time left score more: (100 + 10 per unused guess + seconds left) × level.</li>
+        <li>Each code cracked in a row adds +25% (up to +100%).</li>
+        <li>3 lives. Running out of guesses or time costs one.</li>
+        <li>Power-ups: reveal a digit ×2 (halves that code's points), new code ×1 (free).</li>
       </ul>
     </div>
   );
 }
 
+// Feedback pegs: filled green = right digit in the right place, hollow yellow = right digit in the wrong place.
+function Pegs({ exact, partial }) {
+  const pegs = [...Array(exact).fill('exact'), ...Array(partial).fill('partial')];
+  return (
+    <span className="inline-grid grid-cols-2 gap-0.5 align-middle" role="img" aria-label={`${exact} right place, ${partial} wrong place`}>
+      {Array.from({ length: 4 }, (_, i) => (
+        <span key={i} className={`h-2.5 w-2.5 rounded-full ${pegs[i] === 'exact' ? 'bg-green-500' : pegs[i] === 'partial' ? 'ring-2 ring-yellow-400' : 'bg-slate-700'}`} />
+      ))}
+    </span>
+  );
+}
+
+const tile = 'h-11 w-11 rounded-lg grid place-items-center text-2xl font-bold';
+
 function Game() {
   const [phase, setPhase] = useState('loading'); // loading | menu | play
-  const [puzzle, setPuzzle] = useState(null); // server view of the current puzzle
-  const [fb, setFb] = useState(null); // result of the last answer, shown until "Next"
+  const [round, setRound] = useState(null); // server view of the current code (never contains the secret)
+  const [codeId, setCodeId] = useState(0); // changes whenever a new code starts, so the countdown restarts only then
+  const [fb, setFb] = useState(null); // result of the finished code, shown until "Next"
+  const [draft, setDraft] = useState([]); // digits typed for the next guess (null = empty slot)
   const [left, setLeft] = useState(null); // seconds remaining (display only, the server enforces the limit)
   const [err, setErr] = useState('');
   const [rows, setRows] = useState([]);
   const [feed, setFeed] = useState([]);
   const [live, setLive] = useState(true); // is the event stream connected?
-  const [flash, setFlash] = useState(''); // '', 'correct', 'wrong' or 'timeout': drives the answer animation
-  const [loaded, setLoaded] = useState(false); // has the puzzle image finished loading?
+  const [flash, setFlash] = useState(''); // '', 'correct', 'wrong' or 'timeout': drives the board animation
   const fail = (e) => setErr(e.message);
 
-  // An answer was settled: update the screen and publish events. Sound is a separate subscriber (feedback.js).
+  const locked = (i) => round?.revealed.some((r) => r.index === i);
+  const freshDraft = (p) => Array.from({ length: p.length }, (_, i) => p.revealed.find((r) => r.index === i)?.digit ?? null);
+
+  // A code is finished: update the screen and publish events. Sound is a separate subscriber (feedback.js).
   const settled = useCallback((r) => {
     setFb(r);
-    emit('puzzle:completed', r);
+    emit('puzzle:completed', { ...r, correct: r.solved });
     if (r.over) emit('game:over', r);
     (r.newBadges ?? []).forEach((b) => emit('badge:earned', b));
   }, []);
@@ -100,12 +119,12 @@ function Game() {
     setTimeout(() => setFlash(''), 800);
   }), []);
 
-  const enter = useCallback((p) => { setPuzzle(p); setFb(null); setLeft(null); setErr(''); setLoaded(false); setPhase('play'); }, []);
-  const toMenu = () => { setPuzzle(null); setFb(null); setErr(''); setPhase('menu'); };
+  const enter = useCallback((p) => { setRound(p); setCodeId((c) => c + 1); setFb(null); setLeft(null); setErr(''); setDraft(freshDraft(p)); setPhase('play'); }, []);
+  const toMenu = () => { setRound(null); setFb(null); setErr(''); setPhase('menu'); };
 
   useEffect(() => {
-    api('/api/puzzle')
-      .then((r) => (r.result ? (setPuzzle(null), setFb(r.result), setPhase('play')) : enter(r)))
+    api('/api/round')
+      .then((r) => (r.result ? (setRound(null), setFb(r.result), setPhase('play')) : enter(r)))
       .catch((e) => (e.status === 409 ? setPhase('menu') : (setErr(e.message), setPhase('menu'))));
     api('/api/leaderboard').then(setRows).catch(() => {});
     const es = new EventSource('/api/events'); // server push: leaderboard + activity update live
@@ -116,39 +135,67 @@ function Game() {
     return () => es.close();
   }, [enter]);
 
-  // countdown: displays the time left and reports expiry
+  // countdown for the whole code: displays the time left, warns at 5 s and reports expiry
   useEffect(() => {
-    if (!puzzle || fb) return;
-    const end = Date.now() + puzzle.seconds * 1000;
+    if (!round || fb) return;
+    const end = Date.now() + round.seconds * 1000;
     let warned = false;
     const t = setInterval(() => {
       const s = Math.ceil((end - Date.now()) / 1000);
       setLeft(Math.max(s, 0));
       if (s <= 5 && s > 0 && !warned) { warned = true; emit('time:warning', { seconds: s }); }
-      if (s <= 0) { clearInterval(t); api('/api/answer', { timeout: true }).then(settled).catch(fail); }
+      if (s <= 0) { clearInterval(t); api('/api/guess', { timeout: true }).then(settled).catch(fail); }
     }, 250);
     return () => clearInterval(t);
-  }, [puzzle, fb, settled]);
+  }, [codeId, fb, settled]); // eslint-disable-line react-hooks/exhaustive-deps -- restarts for a new code, not for every guess
 
-  const answer = useCallback((digit) => { if (puzzle && !fb) api('/api/answer', { digit }).then(settled).catch(fail); }, [puzzle, fb, settled]);
+  const typeDigit = useCallback((d) => setDraft((cur) => { const i = cur.findIndex((v, k) => v === null && !round?.revealed.some((r) => r.index === k)); return i < 0 ? cur : cur.map((v, k) => (k === i ? d : v)); }), [round]);
+  const backspace = useCallback(() => setDraft((cur) => {
+    for (let i = cur.length - 1; i >= 0; i--) if (cur[i] !== null && !round?.revealed.some((r) => r.index === i)) return cur.map((v, k) => (k === i ? null : v));
+    return cur;
+  }), [round]);
 
-  // keyboard: press 0-9 to answer
+  const submit = useCallback(() => {
+    if (!round || fb || draft.length === 0 || draft.some((d) => d === null)) return;
+    api('/api/guess', { guess: draft })
+      .then((r) => {
+        if (r.done) return settled(r);
+        emit('guess:submitted', r);
+        const n = { ...round, guesses: [...round.guesses, { guess: draft, exact: r.exact, partial: r.partial }] };
+        setRound(n);
+        setDraft(freshDraft(n));
+      })
+      .catch(fail);
+  }, [round, fb, draft, settled]);
+
+  // keyboard: 0-9 to type, Backspace to delete, Enter to guess
   useEffect(() => {
-    const h = (e) => { if (/^\d$/.test(e.key) && !e.ctrlKey && !e.metaKey && !puzzle?.removed.includes(Number(e.key))) answer(Number(e.key)); };
+    const h = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || fb || phase !== 'play') return;
+      if (/^\d$/.test(e.key)) typeDigit(Number(e.key));
+      else if (e.key === 'Backspace') backspace();
+      else if (e.key === 'Enter') { e.preventDefault(); submit(); } // preventDefault: Enter must not also click a focused button
+    };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [answer, puzzle]);
+  }, [typeDigit, backspace, submit, fb, phase]);
 
   const start = (difficulty) => { setErr(''); api('/api/game', { difficulty }).then(enter).catch(fail); };
-  const next = () => (fb.over ? toMenu() : api('/api/puzzle').then(enter).catch(fail));
-  const hint = () => api('/api/hint', {}).then((r) => { emit('powerup:used', { type: 'hint' }); setPuzzle((p) => ({ ...p, removed: r.removed, hints: r.hints })); }).catch(fail);
+  const next = () => (fb.over ? toMenu() : api('/api/round').then(enter).catch(fail));
+  const hint = () => api('/api/hint', {}).then((r) => {
+    emit('powerup:used', { type: 'hint' });
+    setRound((p) => ({ ...p, revealed: r.revealed, hints: r.hints }));
+    setDraft((cur) => cur.map((v, i) => r.revealed.find((x) => x.index === i)?.digit ?? v));
+  }).catch(fail);
   const skip = () => api('/api/skip', {}).then((p) => { emit('powerup:used', { type: 'skip' }); enter(p); }).catch(fail);
 
   if (phase === 'loading') return null;
 
-  const hud = fb ?? puzzle;
-  const level = LEVELS.find((l) => l.id === puzzle?.difficulty);
-  const secs = left ?? puzzle?.seconds ?? 0;
+  const hud = fb ?? round;
+  const level = LEVELS.find((l) => l.id === round?.difficulty);
+  const secs = left ?? round?.seconds ?? 0;
+  const history = fb ? fb.guesses : round?.guesses ?? [];
+  const attempts = round?.attempts ?? history.length;
   const btn = 'rounded-lg px-3 py-1 text-sm font-semibold disabled:opacity-40';
 
   return (
@@ -158,26 +205,41 @@ function Game() {
           <div className="flex flex-wrap justify-center gap-x-6 gap-y-1 text-lg">
             <span>Score <b>{hud?.score ?? 0}</b></span>
             <span>{'❤️'.repeat(Math.max(hud?.lives ?? 0, 0)) || '💀'}</span>
-            {hud?.streak > 0 && <span title="Correct answers in a row">🔥 ×{hud.streak}</span>}
+            {hud?.streak > 0 && <span title="Codes cracked in a row">🔥 ×{hud.streak}</span>}
             {level && <span className="text-sm self-center rounded-full bg-white/10 px-2">{level.name} {level.mult}</span>}
           </div>
 
-          {puzzle && !fb && (
+          {round && !fb && (
             <div className="w-full max-w-xs" role="timer" aria-live="off">
               <div className="h-2 rounded bg-slate-700 overflow-hidden">
-                <div className={`h-full transition-all duration-300 ${secs <= 5 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} style={{ width: `${(secs / puzzle.total) * 100}%` }} />
+                <div className={`h-full transition-all duration-300 ${secs <= 5 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} style={{ width: `${(secs / round.total) * 100}%` }} />
               </div>
-              <p className={`text-center text-sm mt-1 ${secs <= 5 ? 'text-red-400 font-bold' : 'text-slate-300'}`}>⏱ {secs}s</p>
+              <p className={`text-center text-sm mt-1 ${secs <= 5 ? 'text-red-400 font-bold' : 'text-slate-300'}`}>
+                ⏱ {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')} · guess {Math.min(history.length + 1, attempts)} of {attempts}
+              </p>
             </div>
           )}
 
-          {puzzle && (
-            <img src={puzzle.image} onLoad={() => setLoaded(true)} alt="Banana puzzle: what digit replaces the banana?"
-              className={`rounded-lg bg-white max-w-full transition-opacity duration-500 ${loaded ? 'opacity-100' : 'opacity-0'} ${flash && `flash-${flash}`}`} />
-          )}
-          {puzzle?.api && (
-            <p className="text-xs text-slate-500" title="Round-trip time of our server's request to the Banana API">
-              Banana API: {puzzle.api.source === 'live' ? `${puzzle.api.latencyMs} ms` : 'cached puzzle (service unreachable)'}
+          <div className={`rounded-xl bg-slate-800 p-3 flex flex-col gap-1.5 ${flash && `flash-${flash}`}`} aria-label="Guess board">
+            {Array.from({ length: attempts }, (_, r) => {
+              const past = history[r];
+              const current = !fb && r === history.length;
+              return (
+                <div key={r} className="flex items-center gap-2">
+                  <span className="w-5 text-right text-xs text-slate-500">{r + 1}</span>
+                  {Array.from({ length: round?.length ?? 4 }, (_, i) => {
+                    const digit = past ? past.guess[i] : current ? draft[i] : null;
+                    const cls = past ? 'bg-slate-600' : current ? (locked(i) ? 'bg-indigo-700 ring-2 ring-indigo-400' : 'bg-slate-700 ring-2 ring-yellow-500') : 'bg-slate-700/40';
+                    return <div key={i} className={`${tile} ${cls}`}>{digit ?? ''}</div>;
+                  })}
+                  <span className="w-6">{past && <Pegs exact={past.exact} partial={past.partial} />}</span>
+                </div>
+              );
+            })}
+          </div>
+          {round?.api && !fb && (
+            <p className="text-xs text-slate-500" title="Digits come from the Banana API; this is the round-trip time of the last request">
+              Banana API: {round.api.source === 'live' ? `${round.api.latencyMs} ms` : round.api.source === 'cache' ? 'cached digits (service unreachable)' : 'partly cached digits'}
             </p>
           )}
           <p className="h-5 text-red-400 text-sm" role="alert">{err}</p>
@@ -185,24 +247,27 @@ function Game() {
           {!fb ? (
             <>
               <div className="grid grid-cols-5 gap-2">
-                {[...Array(10).keys()].map((d) => {
-                  const gone = puzzle?.removed.includes(d);
-                  return (
-                    <button key={d} onClick={() => answer(d)} disabled={gone}
-                      className="w-12 h-12 rounded bg-yellow-500 text-slate-900 text-xl font-bold hover:bg-yellow-400 disabled:bg-slate-700 disabled:text-slate-500">{gone ? '·' : d}</button>
-                  );
-                })}
+                {[...Array(10).keys()].map((d) => (
+                  <button key={d} onClick={() => typeDigit(d)} className="w-12 h-12 rounded bg-yellow-500 text-slate-900 text-xl font-bold hover:bg-yellow-400">{d}</button>
+                ))}
               </div>
               <div className="flex gap-2">
-                <button onClick={hint} disabled={!puzzle || puzzle.hints <= 0 || puzzle.removed.length > 0} className={`${btn} bg-indigo-600 hover:bg-indigo-500`}>🎯 50/50 ({puzzle?.hints ?? 0})</button>
-                <button onClick={skip} disabled={!puzzle || puzzle.skips <= 0} className={`${btn} bg-slate-600 hover:bg-slate-500`}>⏭ Skip ({puzzle?.skips ?? 0})</button>
+                <button onClick={backspace} className={`${btn} bg-slate-600 hover:bg-slate-500`} aria-label="Delete last digit">⌫</button>
+                <button onClick={submit} disabled={draft.length === 0 || draft.some((d) => d === null)} className={`${btn} bg-green-600 hover:bg-green-500`}>Guess ⏎</button>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={hint} disabled={!round || round.hints <= 0 || round.revealed.length >= 3} className={`${btn} bg-indigo-600 hover:bg-indigo-500`}>🔍 Reveal digit ({round?.hints ?? 0})</button>
+                <button onClick={skip} disabled={!round || round.skips <= 0} className={`${btn} bg-slate-600 hover:bg-slate-500`}>⏭ New code ({round?.skips ?? 0})</button>
               </div>
             </>
           ) : (
             <div className="text-center">
-              <p className={`text-xl font-semibold ${fb.correct ? 'text-green-400' : fb.timedOut ? 'text-amber-400' : 'text-red-400'}`} role="status">
-                {fb.correct ? `✅ Correct! +${fb.points} pts` : fb.timedOut ? `⏰ Time's up! It was ${fb.solution}` : `❌ Wrong, it was ${fb.solution}`}
+              <p className={`text-xl font-semibold ${fb.solved ? 'text-green-400' : fb.timedOut ? 'text-amber-400' : 'text-red-400'}`} role="status">
+                {fb.solved ? `🔓 Code cracked! +${fb.points} pts` : fb.timedOut ? "⏰ Time's up!" : '🔒 Out of guesses'}
               </p>
+              {!fb.solved && (
+                <p className="mt-1 text-slate-300">The code was <b className="tracking-widest">{fb.secret.join(' ')}</b></p>
+              )}
               {fb.over && <p className="mt-1 text-slate-300">Game over: <b>{fb.score}</b> points, best streak <b>{fb.bestStreak}</b></p>}
               {fb.over && fb.quote && (
                 <figure className="mt-3 max-w-xs mx-auto rounded-lg bg-slate-800 p-3 text-sm">
@@ -216,7 +281,7 @@ function Game() {
                 </figure>
               )}
               <button onClick={next} autoFocus className="mt-2 rounded bg-indigo-600 px-4 py-2 font-semibold hover:bg-indigo-500">
-                {fb.over ? 'Play again' : 'Next puzzle'}
+                {fb.over ? 'Play again' : 'Next code'}
               </button>
             </div>
           )}
@@ -257,9 +322,9 @@ function Profile({ onAvatar }) {
         {stat('Best score', p.best_score)}
         {stat('Games', p.games_played)}
         {stat('Total score', p.total_score)}
-        {stat('Accuracy', p.accuracy === null ? '-' : `${p.accuracy}%`)}
+        {stat('Codes cracked', p.accuracy === null ? '-' : `${p.accuracy}%`)}
         {stat('Best streak', p.best_streak)}
-        {stat('Fastest', p.fastest_ms === null ? '-' : `${(p.fastest_ms / 1000).toFixed(1)}s`)}
+        {stat('Fewest guesses', p.fewest_guesses ?? '-')}
       </section>
       <section className="rounded-lg bg-slate-800 p-4">
         <h2 className="font-bold mb-2">🏅 Badges</h2>

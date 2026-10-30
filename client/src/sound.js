@@ -58,6 +58,8 @@ export function setMuted(m) {
 
 const EFFECTS = {
   click: (t) => tone(880, t, 0.12, 0.06, 'square'),
+  // a guess was scored: the more pegs in the right place, the higher the note
+  peg: (t, exact = 0) => tone(330 + exact * 110, t, 0.14, 0.06, 'triangle'),
   // pitch rises a semitone per answer in the streak (max 6), so streaks are audible
   correct: (t, streak = 0) => { const k = 2 ** (Math.min(streak, 6) / 12); [523.25, 659.25, 783.99].forEach((f, i) => tone(f * k, t + i * 0.08, 0.2, 0.07)); },
   wrong: (t) => { tone(196, t, 0.25, 0.07, 'sawtooth'); tone(147, t + 0.12, 0.35, 0.07, 'sawtooth'); },

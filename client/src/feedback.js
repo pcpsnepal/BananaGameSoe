@@ -6,6 +6,7 @@ import { sfx } from './sound.js';
 export function subscribeFeedback() {
   const offs = [
     on('puzzle:completed', (r) => sfx(r.correct ? 'correct' : r.timedOut ? 'timeup' : 'wrong', r.streak)),
+    on('guess:submitted', (r) => sfx('peg', r.exact)),
     on('game:over', () => sfx('gameover')),
     on('time:warning', () => sfx('warning')),
     on('powerup:used', () => sfx('powerup')),

@@ -1,17 +1,17 @@
 # Banana Game
 
-Puzzle game built on the **Banana API** (https://marcconrad.com/uob/banana/doc.php).
-Each puzzle is an image of six equations with a banana hiding one digit; the player picks the missing digit (0-9).
+**Banana Mastermind**: a code-breaking game built on the **Banana API** (https://marcconrad.com/uob/banana/doc.php).
+The secret 4-digit code is made of the solution digits of four Banana API puzzles, fetched by the server. The player guesses the code and gets pegs after each guess: a filled green peg = right digit in the right place, a hollow yellow peg = right digit in the wrong place.
 
 Stack: **Fastify** (backend) · **React + Vite** (frontend) · **Tailwind CSS v4** (styling).
 
 ## Features
 
-- **Three levels:** Easy (45 s, ×1), Normal (30 s, ×2), Hard (15 s, ×3) per puzzle; the server enforces the time limit.
-- **Scoring:** (10 + seconds left) × level, +25% per correct answer in a row (max +100%). 3 lives.
-- **Power-ups:** 50/50 ×2 per game (halves that puzzle's points) and a free Skip ×1.
+- **Three levels** (per code): Easy 10 guesses / 3 min (×1), Normal 8 guesses / 2 min (×2), Hard 6 guesses / 90 s (×3); the server enforces the time limit.
+- **Scoring:** (100 + 10 per unused guess + seconds left) × level, +25% per code cracked in a row (max +100%). 3 lives: running out of guesses or time costs one.
+- **Power-ups:** reveal a digit ×2 per game (halves that code's points) and a free new code ×1.
 - **Live leaderboard and activity feed** pushed to every player (Server-Sent Events).
-- **Accounts:** name, username, password + confirmation with validation and a strength meter; avatar, statistics and badges (First Banana, Speed Demon, Hot Streak, Veteran).
+- **Accounts:** name, username, password + confirmation with validation and a strength meter; avatar, statistics and badges (First Banana, Sharp Mind, Hot Streak, Veteran).
 - **Motivational quote** after each game (ZenQuotes, with local fallback), Banana API latency shown on screen.
 - **Sound effects and animations** for correct / wrong / time running out (muteable).
 - **Admin panel** (players, login history, CSV export) and a **public JSON API** for other apps.
@@ -28,7 +28,7 @@ cd server && npm install && npm start
 cd client && npm install && npm run dev
 ```
 
-Open http://localhost:5173, create an account, pick a level and play. Press 0-9 on the keyboard to answer.
+Open http://localhost:5173, create an account, pick a level and play. Type digits on the keyboard (or the on-screen keypad), Backspace to delete, Enter to guess.
 
 **Make an admin** (there is deliberately no way to become admin from the website): register normally, stop the server, run
 `cd server && npm run make-admin -- <username>`, then start it again. An "admin" link appears after the next login.
@@ -73,9 +73,9 @@ client/src/
 | POST | `/api/logout` | yes | destroy session |
 | GET | `/api/me` | no | current user, role, avatar, `csrfToken` |
 | POST | `/api/game` | yes | `{difficulty}` starts a game |
-| GET | `/api/puzzle` | yes | current puzzle (same one after reload) or next one |
-| POST | `/api/answer` | yes | `{digit}` or `{timeout:true}`; returns result, points, `newBadges`, `quote` at game over |
-| POST | `/api/hint`, `/api/skip` | yes | power-ups |
+| GET | `/api/round` | yes | current code (same one after reload, never containing the secret) or a new one |
+| POST | `/api/guess` | yes | `{guess:[d,d,d,d]}` returns pegs `{exact, partial}`; when the code ends: result, points, `newBadges`, `quote` at game over. `{timeout:true}` reports the clock running out |
+| POST | `/api/hint`, `/api/skip` | yes | power-ups: reveal a digit / new code |
 | GET/POST | `/api/profile` | yes | stats, badges, avatar |
 | GET | `/api/leaderboard` | yes | top 10 |
 | GET | `/api/events` | yes | Server-Sent Events: `leaderboard`, `activity` |
@@ -94,14 +94,14 @@ All state-changing requests from a logged-in user need the `X-CSRF-Token` header
 
 ### 2. Event-driven programming
 - **Browser events:** clicks, keyboard digits, form submit, `img onLoad`, timers (`setInterval` countdown, 5 s warning).
-- **Client pub/sub** (`events.js`): `emit('puzzle:completed')` is published once; the sound effects, the green/red animation and the game-over handling each subscribe on their own. Also `time:warning`, `powerup:used`, `badge:earned`, `session:expired`.
+- **Client pub/sub** (`events.js`): `emit('puzzle:completed')` is published once when a code ends; the sound effects, the green/red board animation and the game-over handling each subscribe on their own. Also `guess:submitted`, `time:warning`, `powerup:used`, `badge:earned`, `session:expired`.
 - **Server pub/sub** (`events.js`): the game rules emit `answer`, `score`, `streak`, `game:over`, `badge`; subscribers update statistics and badges, the leaderboard, and push to browsers over **Server-Sent Events**. The rules do not know who listens.
 - **Network failure handling:** fetch errors give a readable message; the event stream shows "reconnecting" and the browser retries by itself.
 - Alternatives: polling (simple, wasteful), WebSockets (two-way, more setup than needed for one-way updates).
 
 ### 3. Interoperability
-- **Consumes** the Banana API (JSON over HTTPS, `base64=yes` so the image travels inside the response) and ZenQuotes (REST/JSON). Both run on other people's systems in other stacks; the only contract is HTTP + JSON.
-- **Resilience:** request timeouts, response validation, a 10-puzzle cache used when the API fails, a circuit breaker (3 failures, 30 s cooldown), a 60 s quote cache and local fallback quotes. Latency is measured and shown. `npm test` proves each behaviour with a fake `fetch`.
+- **Consumes** the Banana API (JSON over HTTPS; the game needs only each puzzle's solution digit, so it uses plain `out=json` without the image: about 100 bytes per call, four calls in parallel per code. The docs also offer `out=csv` and `base64=yes`; both were considered and rejected for that reason) and ZenQuotes (REST/JSON). Both run on other people's systems in other stacks; the only contract is HTTP + JSON.
+- **Resilience:** request timeouts, response validation, a 40-digit cache used when the API fails (a code can be made of live and cached digits), a circuit breaker (3 failures, 30 s cooldown), a 60 s quote cache and local fallback quotes. Latency is measured and shown. `npm test` proves each behaviour with a fake `fetch`.
 - **Provides** an API: `/api/v1/scores` and `/api/v1/status` return JSON for any other site or app, CORS enabled, versioned, and exposing only display names and scores.
 - REST + JSON vs SOAP + XML: JSON parses natively in JavaScript and the data is simple; SOAP adds formal contracts and tooling that this project does not need.
 
