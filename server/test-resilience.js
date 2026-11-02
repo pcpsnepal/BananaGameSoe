@@ -1,6 +1,6 @@
 // Tests for external-service handling and the public API. No network: fetch is always injected.
 import assert from 'node:assert';
-import { createBananaClient } from './services/banana.js';
+import { createBananaClient, safeImage } from './services/banana.js';
 import { createQuoteClient, LOCAL_QUOTES } from './services/quotes.js';
 import { build } from './app.js';
 
@@ -16,6 +16,21 @@ let calls = 0;
 const live = createBananaClient({ now, fetchImpl: async () => { const k = ++calls; clock += 42; return { ok: true, json: async () => ({ question: 'u', solution: k % 10 }) }; } });
 const d1 = await live.getDigits(4);
 assert.deepEqual([d1.digits, d1.source, d1.latencyMs, calls], [[1, 2, 3, 4], 'live', 42, 4]); // 4 requests, one per digit
+
+// puzzle image links: kept when they are https on a Banana host, dropped otherwise (the digit still works)
+const withLink = (question) => createBananaClient({ fetchImpl: async () => ({ ok: true, json: async () => ({ question, solution: 4 }) }) });
+const good = await withLink('https://www.sanfoh.com/uob/banana/data/a.png').getDigits(2);
+assert.deepEqual([good.digits, good.images], [[4, 4], ['https://www.sanfoh.com/uob/banana/data/a.png', 'https://www.sanfoh.com/uob/banana/data/a.png']]);
+for (const bad of ['http://www.sanfoh.com/a.png', 'https://evil.example/a.png', 'https://sanfoh.com.evil.example/a.png', 'javascript:alert(1)', 'not a url', '', undefined]) {
+  assert.equal(safeImage(bad), null, String(bad));
+  assert.deepEqual((await withLink(bad).getDigits(1)).images, [null]);
+}
+// cached digits keep their puzzle link
+let okNow = true;
+const keep = createBananaClient({ fetchImpl: async () => { if (!okNow) throw new Error('down'); return { ok: true, json: async () => ({ question: 'https://www.sanfoh.com/k.png', solution: 8 }) }; } });
+await keep.getDigits(1);
+okNow = false;
+assert.deepEqual((await keep.getDigits(1)).images, ['https://www.sanfoh.com/k.png']);
 
 // the solution is a string in some responses: accepted when it is a digit
 assert.deepEqual((await createBananaClient({ fetchImpl: solutionResponse('7') }).getDigits(2)).digits, [7, 7]);

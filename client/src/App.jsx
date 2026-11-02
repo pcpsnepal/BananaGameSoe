@@ -88,6 +88,23 @@ function Pegs({ exact, partial }) {
 
 const tile = 'h-11 w-11 rounded-lg grid place-items-center text-2xl font-bold';
 
+// The Banana puzzle a code digit came from. The image is loaded straight from the Banana host and is only
+// sent by our server for revealed digits (or once the code is over). If it fails to load, the digit still shows.
+function PuzzleCard({ index, digit, image, small }) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <figure className={`rounded-lg bg-slate-800 p-2 text-center text-xs text-slate-300 ${small ? 'w-40' : 'w-full max-w-xs'}`}>
+      {image && !broken && (
+        <img src={image} onError={() => setBroken(true)} alt={`Banana puzzle for digit ${index + 1}: the banana hides ${digit}`} className="w-full rounded bg-white" />
+      )}
+      <figcaption className="mt-1">
+        Digit {index + 1} = <b className="text-sm text-yellow-400">{digit}</b>
+        {image && broken && <span className="block text-slate-500">(puzzle image unavailable)</span>}
+      </figcaption>
+    </figure>
+  );
+}
+
 function Game() {
   const [phase, setPhase] = useState('loading'); // loading | menu | play
   const [round, setRound] = useState(null); // server view of the current code (never contains the secret)
@@ -244,6 +261,13 @@ function Game() {
           )}
           <p className="h-5 text-red-400 text-sm" role="alert">{err}</p>
 
+          {!fb && round?.revealed.length > 0 && (
+            <section className="flex flex-col items-center gap-2 w-full" aria-label="Revealed digits and their Banana puzzles">
+              <h2 className="text-sm text-slate-400">Revealed: the Banana puzzle behind each digit</h2>
+              {[...round.revealed].sort((a, b) => a.index - b.index).map((x) => <PuzzleCard key={x.index} {...x} />)}
+            </section>
+          )}
+
           {!fb ? (
             <>
               <div className="grid grid-cols-5 gap-2">
@@ -267,6 +291,14 @@ function Game() {
               </p>
               {!fb.solved && (
                 <p className="mt-1 text-slate-300">The code was <b className="tracking-widest">{fb.secret.join(' ')}</b></p>
+              )}
+              {fb.puzzles?.some((p) => p.image) && (
+                <section className="mt-3" aria-label="The four Banana puzzles behind this code">
+                  <h2 className="text-sm text-slate-400 mb-2">The four Banana puzzles behind this code</h2>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {fb.puzzles.map((p, i) => <PuzzleCard key={i} index={i} {...p} small />)}
+                  </div>
+                </section>
               )}
               {fb.over && <p className="mt-1 text-slate-300">Game over: <b>{fb.score}</b> points, best streak <b>{fb.bestStreak}</b></p>}
               {fb.over && fb.quote && (
