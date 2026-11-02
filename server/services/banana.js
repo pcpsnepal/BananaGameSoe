@@ -1,6 +1,6 @@
 // Client for the Banana API (https://marcconrad.com/uob/banana/doc.php): the only place that talks to it.
-// The game only needs each puzzle's solution digit (it becomes part of the secret code), so we use plain
-// out=json without images: the response is about 100 bytes instead of an embedded PNG.
+// The game uses each puzzle's solution digit as part of the secret code. We use plain out=json (about 100 bytes):
+// the image is not downloaded, only its link is kept so the player can see the puzzle behind a revealed digit.
 //
 // Resilience (all optional knobs):
 //  - timeout: give up on a slow request instead of hanging the game
@@ -11,6 +11,17 @@
 import { timeoutFetch } from './http.js';
 
 const BANANA = 'https://marcconrad.com/uob/banana/api.php?out=json';
+
+// The image link comes from a third party, so it is only passed on if it is plain https on a Banana host.
+const IMAGE_HOSTS = ['sanfoh.com', 'marcconrad.com'];
+export function safeImage(link) {
+  try {
+    const u = new URL(link);
+    return u.protocol === 'https:' && IMAGE_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`)) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
 
 export function createBananaClient({ timeoutMs = 5000, failureThreshold = 3, cooldownMs = 30000, cacheSize = 40, fetchImpl, now = Date.now } = {}) {
   const cache = [];
@@ -29,32 +40,32 @@ export function createBananaClient({ timeoutMs = 5000, failureThreshold = 3, coo
     const solution = Number(p.solution);
     if (p.solution === '' || p.solution == null || !Number.isInteger(solution) || solution < 0 || solution > 9) throw new Error('Banana API sent an invalid solution');
     lastLatencyMs = now() - start;
-    return solution;
+    return { digit: solution, image: safeImage(p.question) };
   }
 
-  // One digit: live if possible, otherwise a cached one.
+  // One digit and its puzzle image link: live if possible, otherwise a cached one.
   async function oneDigit() {
     if (!isOpen()) {
       try {
-        const digit = await live();
+        const item = await live();
         failures = 0;
-        cache.push(digit);
+        cache.push(item);
         if (cache.length > cacheSize) cache.shift();
-        return { digit, source: 'live' };
+        return { ...item, source: 'live' };
       } catch {
         failures++;
         if (tripped()) openedAt = now();
       }
     }
-    if (cache.length) return { digit: cache[Math.floor(Math.random() * cache.length)], source: 'cache' };
+    if (cache.length) return { ...cache[Math.floor(Math.random() * cache.length)], source: 'cache' };
     throw new Error('Banana API unavailable and nothing cached');
   }
 
-  // n digits fetched in parallel. Returns { digits, source: 'live' | 'cache' | 'mixed', latencyMs }.
+  // n digits fetched in parallel. Returns { digits, images, source: 'live' | 'cache' | 'mixed', latencyMs }; images[i] is the puzzle link for digits[i] (or null).
   async function getDigits(n) {
     const parts = await Promise.all(Array.from({ length: n }, oneDigit));
     const live = parts.filter((p) => p.source === 'live').length;
-    return { digits: parts.map((p) => p.digit), source: live === n ? 'live' : live === 0 ? 'cache' : 'mixed', latencyMs: lastLatencyMs };
+    return { digits: parts.map((p) => p.digit), images: parts.map((p) => p.image), source: live === n ? 'live' : live === 0 ? 'cache' : 'mixed', latencyMs: lastLatencyMs };
   }
 
   const stats = () => ({ circuit: isOpen() ? 'open' : tripped() ? 'half-open' : 'closed', failures, cachedDigits: cache.length, lastLatencyMs });
