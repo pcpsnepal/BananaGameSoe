@@ -11,7 +11,7 @@ export function gameRoutes(app, { game, getDigits, getQuote, store }) {
   // Start a new code: the secret is made of digits from the Banana API.
   async function withCode(g) {
     const c = await getDigits(CODE_LENGTH);
-    return { ...g, secret: c.digits, api: { source: c.source, latencyMs: c.latencyMs }, history: [], revealed: [], hinted: false, issuedAt: Date.now() };
+    return { ...g, secret: c.digits, images: c.images ?? [], api: { source: c.source, latencyMs: c.latencyMs }, history: [], revealed: [], hinted: false, issuedAt: Date.now() };
   }
   const unavailable = (reply) => reply.code(502).send({ error: 'Banana API unavailable' });
 
@@ -93,7 +93,7 @@ export function gameRoutes(app, { game, getDigits, getQuote, store }) {
     if (g.hints <= 0 || g.revealed.length >= MAX_REVEALS) return reply.code(409).send({ error: 'no reveal available' });
     const hidden = g.secret.map((_, i) => i).filter((i) => !g.revealed.some((r) => r.index === i));
     const index = hidden[Math.floor(Math.random() * hidden.length)];
-    const revealed = [...g.revealed, { index, digit: g.secret[index] }];
+    const revealed = [...g.revealed, { index, digit: g.secret[index], image: g.images?.[index] ?? null }]; // the puzzle behind this digit
     req.session.game = { ...g, hinted: true, hints: g.hints - 1, revealed };
     return { revealed, hints: g.hints - 1 };
   });
