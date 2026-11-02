@@ -10,7 +10,11 @@ import { scoreGuess } from './game.js';
 const SECRETS = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 0, 1, 2], [3, 3, 4, 4], [0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]];
 function fakeBanana() {
   let i = 0;
-  const b = { calls: 0, getDigits: async () => { b.calls++; return { digits: SECRETS[i++ % SECRETS.length], source: 'live', latencyMs: 12 }; }, stats: () => ({}) };
+  const b = {
+    calls: 0,
+    getDigits: async () => { b.calls++; return { digits: SECRETS[i++ % SECRETS.length], images: [0, 1, 2, 3].map((k) => `https://www.sanfoh.com/uob/banana/data/p${i}${k}.png`), source: 'live', latencyMs: 12 }; },
+    stats: () => ({}),
+  };
   return b;
 }
 const quotes = { getQuote: async () => ({ text: 'q', author: 'a', source: 'local' }) };
@@ -53,6 +57,7 @@ assert.equal((await call('GET', '/api/round')).code, 409); // no game yet
 assert.equal((await call('POST', '/api/game', { difficulty: 'nope' })).code, 400);
 const g = await call('POST', '/api/game', { difficulty: 'normal' });
 assert.ok(!('secret' in g.body) && !JSON.stringify(g.body).includes('[1,2,3,4]'), 'the code never reaches the browser');
+assert.ok(!JSON.stringify(g.body).includes('sanfoh'), 'no puzzle image link before a digit is revealed');
 assert.deepEqual([g.body.length, g.body.attempts, g.body.total, g.body.lives, g.body.hints, g.body.skips], [4, 8, 120, 3, 2, 1]);
 assert.deepEqual(g.body.api, { source: 'live', latencyMs: 12 });
 assert.equal((await call('GET', '/api/round')).body.length, 4); // reload: same code
@@ -69,6 +74,8 @@ assert.equal((await call('GET', '/api/round')).body.guesses.length, 1); // histo
 // --- scoring: (100 + 10 x unused guesses + seconds left) x 2 (normal), no streak yet ---
 const c1 = (await call('POST', '/api/guess', { guess: [1, 2, 3, 4] })).body; // 2nd guess, 6 unused
 assert.deepEqual([c1.done, c1.solved, c1.secret, c1.streak], [true, true, [1, 2, 3, 4], 1]);
+assert.deepEqual(c1.puzzles.map((p) => p.digit), [1, 2, 3, 4]); // finished: the four puzzles behind the code are shown
+assert.ok(c1.puzzles.every((p) => p.image.startsWith('https://www.sanfoh.com/')));
 assert.ok(c1.points >= 556 && c1.points <= 560, `points ${c1.points}`);
 assert.equal((await call('POST', '/api/guess', { guess: WRONG })).code, 409); // code is over: need a new one
 
@@ -88,6 +95,9 @@ await call('GET', '/api/round'); // secret 3,3,4,4
 const h1 = (await call('POST', '/api/hint')).body;
 assert.equal(h1.revealed.length, 1);
 assert.equal(h1.revealed[0].digit, [3, 3, 4, 4][h1.revealed[0].index]); // reveals a true digit at its true place
+assert.match(h1.revealed[0].image, /^https:\/\/www\.sanfoh\.com\//); // together with the puzzle it came from
+const afterHint = JSON.stringify((await call('GET', '/api/round')).body);
+assert.equal((afterHint.match(/sanfoh/g) ?? []).length, 1, 'only the revealed puzzle image is sent, and it survives a reload');
 const h2 = (await call('POST', '/api/hint')).body;
 assert.deepEqual([h2.revealed.length, h2.hints], [2, 0]);
 assert.notEqual(h2.revealed[1].index, h2.revealed[0].index);

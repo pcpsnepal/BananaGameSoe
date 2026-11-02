@@ -43,7 +43,8 @@ export function createGame({ timeLimitMs, bus }) {
     else if (solved && streak % 5 === 0) bus.emit('streak', { user, streak });
     return {
       next,
-      result: { done: true, solved, timedOut, secret: g.secret, guesses: g.history, points, score: next.score, lives: next.lives, streak, bestStreak: next.bestStreak, over },
+      // once a code is over the player may see the four Banana puzzles it was made from
+      result: { done: true, solved, timedOut, secret: g.secret, puzzles: g.secret.map((digit, i) => ({ digit, image: g.images?.[i] ?? null })), guesses: g.history, points, score: next.score, lives: next.lives, streak, bestStreak: next.bestStreak, over },
     };
   }
 

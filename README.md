@@ -9,7 +9,7 @@ Stack: **Fastify** (backend) · **React + Vite** (frontend) · **Tailwind CSS v4
 
 - **Three levels** (per code): Easy 10 guesses / 3 min (×1), Normal 8 guesses / 2 min (×2), Hard 6 guesses / 90 s (×3); the server enforces the time limit.
 - **Scoring:** (100 + 10 per unused guess + seconds left) × level, +25% per code cracked in a row (max +100%). 3 lives: running out of guesses or time costs one.
-- **Power-ups:** reveal a digit ×2 per game (halves that code's points) and a free new code ×1.
+- **Power-ups:** reveal a digit ×2 per game (halves that code's points; the Banana puzzle behind the digit is shown) and a free new code ×1. When a code is over, the four puzzles it was made from are shown.
 - **Live leaderboard and activity feed** pushed to every player (Server-Sent Events).
 - **Accounts:** name, username, password + confirmation with validation and a strength meter; avatar, statistics and badges (First Banana, Sharp Mind, Hot Streak, Veteran).
 - **Motivational quote** after each game (ZenQuotes, with local fallback), Banana API latency shown on screen.
@@ -100,7 +100,7 @@ All state-changing requests from a logged-in user need the `X-CSRF-Token` header
 - Alternatives: polling (simple, wasteful), WebSockets (two-way, more setup than needed for one-way updates).
 
 ### 3. Interoperability
-- **Consumes** the Banana API (JSON over HTTPS; the game needs only each puzzle's solution digit, so it uses plain `out=json` without the image: about 100 bytes per call, four calls in parallel per code. The docs also offer `out=csv` and `base64=yes`; both were considered and rejected for that reason) and ZenQuotes (REST/JSON). Both run on other people's systems in other stacks; the only contract is HTTP + JSON.
+- **Consumes** the Banana API (JSON over HTTPS; the game needs only each puzzle's solution digit, so it uses plain `out=json` without the image: about 100 bytes per call, four calls in parallel per code. The docs also offer `out=csv` and `base64=yes`; both were considered and rejected for that reason). The response also contains a link to each puzzle's image: the server keeps those links, validates them (https and a Banana host only), and sends one to the browser only for a **revealed** digit, or for all four once the code is over, so the player sees the Banana puzzle behind the digit. The browser loads that image straight from the Banana host, which reveals the player's IP address to that host; the earlier `base64=yes` approach avoided that but cost about 60 KB per puzzle and ZenQuotes (REST/JSON). Both run on other people's systems in other stacks; the only contract is HTTP + JSON.
 - **Resilience:** request timeouts, response validation, a 40-digit cache used when the API fails (a code can be made of live and cached digits), a circuit breaker (3 failures, 30 s cooldown), a 60 s quote cache and local fallback quotes. Latency is measured and shown. `npm test` proves each behaviour with a fake `fetch`.
 - **Provides** an API: `/api/v1/scores` and `/api/v1/status` return JSON for any other site or app, CORS enabled, versioned, and exposing only display names and scores.
 - REST + JSON vs SOAP + XML: JSON parses natively in JavaScript and the data is simple; SOAP adds formal contracts and tooling that this project does not need.
