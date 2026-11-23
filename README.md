@@ -1,7 +1,7 @@
 # Banana Game
 
 **Banana Mastermind**: a code-breaking game built on the **Banana API** (https://marcconrad.com/uob/banana/doc.php).
-The secret 4-digit code is made of the solution digits of four Banana API puzzles, fetched by the server. The player guesses the code and gets pegs after each guess: a filled green peg = right digit in the right place, a hollow yellow peg = right digit in the wrong place.
+The secret 4-digit code is made of the solution digits of four Banana API puzzles, fetched by the server. The player solves the four puzzle pictures (each banana hides one digit), enters the code and gets pegs after each guess: a filled green peg = right digit in the right place, a hollow yellow peg = right digit in the wrong place.
 
 Stack: **Fastify** (backend) · **React + Vite** (frontend) · **Tailwind CSS v4** (styling).
 
@@ -9,7 +9,7 @@ Stack: **Fastify** (backend) · **React + Vite** (frontend) · **Tailwind CSS v4
 
 - **Three levels** (per code): Easy 10 guesses / 3 min (×1), Normal 8 guesses / 2 min (×2), Hard 6 guesses / 90 s (×3); the server enforces the time limit.
 - **Scoring:** (100 + 10 per unused guess + seconds left) × level, +25% per code cracked in a row (max +100%). 3 lives: running out of guesses or time costs one.
-- **Power-ups:** reveal a digit ×2 per game (halves that code's points; the Banana puzzle behind the digit is shown) and a free new code ×1. When a code is over, the four puzzles it was made from are shown.
+- **Power-ups:** reveal a digit ×2 per game (halves that code's points; the digit is filled in and its puzzle is marked 🔍) and a free new code ×1. The four puzzle pictures are on screen while a code is played (one large picture at a time, with a tab per digit); when a code is over, they are shown again with their digits.
 - **Live leaderboard and activity feed** pushed to every player (Server-Sent Events).
 - **Accounts:** name, username, password + confirmation with validation and a strength meter; avatar, statistics and badges (First Banana, Sharp Mind, Hot Streak, Veteran).
 - **Motivational quote** after each game (ZenQuotes, with local fallback), Banana API latency shown on screen.
@@ -74,6 +74,7 @@ client/src/
 | GET | `/api/me` | no | current user, role, avatar, `csrfToken` |
 | POST | `/api/game` | yes | `{difficulty}` starts a game |
 | GET | `/api/round` | yes | current code (same one after reload, never containing the secret) or a new one |
+| GET | `/api/puzzle/:index?v=<code id>` | yes | the PNG for one digit of the current code, downloaded by the server from the Banana host; the Banana link itself never reaches the browser; 404 for a wrong index or an old code id, 502 if the picture host is down |
 | POST | `/api/guess` | yes | `{guess:[d,d,d,d]}` returns pegs `{exact, partial}`; when the code ends: result, points, `newBadges`, `quote` at game over. `{timeout:true}` reports the clock running out |
 | POST | `/api/hint`, `/api/skip` | yes | power-ups: reveal a digit / new code |
 | GET/POST | `/api/profile` | yes | stats, badges, avatar |
@@ -100,7 +101,8 @@ All state-changing requests from a logged-in user need the `X-CSRF-Token` header
 - Alternatives: polling (simple, wasteful), WebSockets (two-way, more setup than needed for one-way updates).
 
 ### 3. Interoperability
-- **Consumes** the Banana API (JSON over HTTPS; the game needs only each puzzle's solution digit, so it uses plain `out=json` without the image: about 100 bytes per call, four calls in parallel per code. The docs also offer `out=csv` and `base64=yes`; both were considered and rejected for that reason). The response also contains a link to each puzzle's image: the server keeps those links, validates them (https and a Banana host only), and sends one to the browser only for a **revealed** digit, or for all four once the code is over, so the player sees the Banana puzzle behind the digit. The browser loads that image straight from the Banana host, which reveals the player's IP address to that host; the earlier `base64=yes` approach avoided that but cost about 60 KB per puzzle and ZenQuotes (REST/JSON). Both run on other people's systems in other stacks; the only contract is HTTP + JSON.
+- **Consumes** the Banana API (JSON over HTTPS, plain `out=json`: about 100 bytes per call, four calls in parallel per code). The docs also offer `out=csv` (small, but less typed to validate) and `base64=yes` (puts the whole PNG, about 60 KB, into every call and into the digit cache); both were rejected. The player solves each puzzle from its picture, and the image link in the response is the catch: **the Banana filename ends in the solution digit** (`…n96.png` is the puzzle whose answer is 6; the last digit matched in 25 of 25 samples), so the browser must never see it. The server keeps the validated link (https and a Banana host only), downloads the PNG itself (`getImage` in `services/banana.js`: 5 s timeout, redirects refused, PNG only, 1 MB cap, small cache) and serves it from its own `/api/puzzle/:index` route under an opaque URL tied to the current code. Side effects: the browser never contacts the Banana host, so the player's IP address is not revealed to it, and a picture-host outage gives a clean 502 while the digits still work (the pegs remain). Cost: the server carries about 40 KB per picture. The game also consumes ZenQuotes (REST/JSON). Both services run on other people's systems in other stacks; the only contract is HTTP + JSON.
+- **Pitfall found while adding the pictures:** `@fastify/session` saves the session on every response, so a slow request writes back the copy it loaded at the start. The picture route can take a second (it downloads), so a reveal or a guess made meanwhile was undone. The route now reads what it needs and drops its copy of the session; `test.js` has a regression test (slow download plus a reveal in between) that failed before the fix.
 - **Resilience:** request timeouts, response validation, a 40-digit cache used when the API fails (a code can be made of live and cached digits), a circuit breaker (3 failures, 30 s cooldown), a 60 s quote cache and local fallback quotes. Latency is measured and shown. `npm test` proves each behaviour with a fake `fetch`.
 - **Provides** an API: `/api/v1/scores` and `/api/v1/status` return JSON for any other site or app, CORS enabled, versioned, and exposing only display names and scores.
 - REST + JSON vs SOAP + XML: JSON parses natively in JavaScript and the data is simple; SOAP adds formal contracts and tooling that this project does not need.

@@ -88,8 +88,8 @@ function Pegs({ exact, partial }) {
 
 const tile = 'h-11 w-11 rounded-lg grid place-items-center text-2xl font-bold';
 
-// The Banana puzzle a code digit came from. The image is loaded straight from the Banana host and is only
-// sent by our server for revealed digits (or once the code is over). If it fails to load, the digit still shows.
+// The Banana puzzle a code digit came from, shown once a code is over. The picture comes from our own server
+// (/api/puzzle/...), which fetched it from the Banana host. If it fails to load, the digit still shows.
 function PuzzleCard({ index, digit, image, small }) {
   const [broken, setBroken] = useState(false);
   return (
@@ -102,6 +102,39 @@ function PuzzleCard({ index, digit, image, small }) {
         {image && broken && <span className="block text-slate-500">(puzzle image unavailable)</span>}
       </figcaption>
     </figure>
+  );
+}
+
+// The puzzles the player solves: one big picture at a time (the banana hides a digit of an equation), one tab per code
+// digit. It follows the digit being typed; a click on a tab looks at another puzzle until the next digit is typed.
+// The pictures come from our own server: the Banana filename gives the answer away, so the browser never sees it.
+function PuzzleViewer({ images, revealed, draft }) {
+  const next = Math.max(0, draft.findIndex((d, i) => d === null && !revealed.some((r) => r.index === i)));
+  const [pick, setPick] = useState(null);
+  const [broken, setBroken] = useState({});
+  useEffect(() => setPick(null), [next]);
+  useEffect(() => { images.forEach((s) => { if (s) new Image().src = s; }); }, [images]); // load all four now, so the next puzzle is already there
+  const shown = pick ?? next;
+  const src = images[shown];
+  const given = revealed.find((r) => r.index === shown);
+  return (
+    <section className="w-full max-w-md flex flex-col items-center gap-2" aria-label="Banana puzzles">
+      <h2 className="text-sm text-slate-400">Puzzle {shown + 1} of {images.length}: find the digit the banana hides</h2>
+      <div className="flex gap-1">
+        {images.map((_, i) => (
+          <button key={i} onClick={() => setPick(i)} aria-pressed={i === shown} aria-label={`Puzzle ${i + 1}`}
+            className={`rounded px-3 py-1 text-sm font-semibold ${i === shown ? 'bg-yellow-500 text-slate-900' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            {i + 1}{revealed.some((r) => r.index === i) ? ' 🔍' : ''}
+          </button>
+        ))}
+      </div>
+      {src && !broken[src] ? (
+        <img key={src} src={src} onError={() => setBroken((b) => ({ ...b, [src]: true }))} alt={`Banana puzzle ${shown + 1}: the banana hides digit ${shown + 1} of the code`} className="w-full rounded bg-white" />
+      ) : (
+        <p className="w-full rounded bg-slate-800 p-6 text-center text-sm text-slate-400">Puzzle picture unavailable. Use the pegs to work out this digit.</p>
+      )}
+      {given && <p className="text-sm text-slate-300">Revealed: digit {shown + 1} is <b className="text-yellow-400">{given.digit}</b></p>}
+    </section>
   );
 }
 
@@ -237,6 +270,8 @@ function Game() {
             </div>
           )}
 
+          {round && !fb && round.images?.some(Boolean) && <PuzzleViewer key={codeId} images={round.images} revealed={round.revealed} draft={draft} />}
+
           <div className={`rounded-xl bg-slate-800 p-3 flex flex-col gap-1.5 ${flash && `flash-${flash}`}`} aria-label="Guess board">
             {Array.from({ length: attempts }, (_, r) => {
               const past = history[r];
@@ -260,13 +295,6 @@ function Game() {
             </p>
           )}
           <p className="h-5 text-red-400 text-sm" role="alert">{err}</p>
-
-          {!fb && round?.revealed.length > 0 && (
-            <section className="flex flex-col items-center gap-2 w-full" aria-label="Revealed digits and their Banana puzzles">
-              <h2 className="text-sm text-slate-400">Revealed: the Banana puzzle behind each digit</h2>
-              {[...round.revealed].sort((a, b) => a.index - b.index).map((x) => <PuzzleCard key={x.index} {...x} />)}
-            </section>
-          )}
 
           {!fb ? (
             <>

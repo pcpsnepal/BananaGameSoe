@@ -50,7 +50,7 @@ export function build({
   registerSecurity(app, { allowedOrigins });
   authRoutes(app, { store, limiter: createLoginLimiter({ max: loginMaxFailures, windowMs: loginWindowMs }) });
   adminRoutes(app, { store });
-  gameRoutes(app, { game, getDigits: banana.getDigits, getQuote: quotes.getQuote, store });
+  gameRoutes(app, { game, getDigits: banana.getDigits, getImage: banana.getImage, getQuote: quotes.getQuote, store });
   profileRoutes(app, { store });
   publicRoutes(app, { store, events, banana });
 

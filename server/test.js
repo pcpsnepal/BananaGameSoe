@@ -13,6 +13,7 @@ function fakeBanana() {
   const b = {
     calls: 0,
     getDigits: async () => { b.calls++; return { digits: SECRETS[i++ % SECRETS.length], images: [0, 1, 2, 3].map((k) => `https://www.sanfoh.com/uob/banana/data/p${i}${k}.png`), source: 'live', latencyMs: 12 }; },
+    getImage: async (link) => ({ type: 'image/png', body: Buffer.from(link) }), // the "picture" is just its own link, so tests can tell which one was served
     stats: () => ({}),
   };
   return b;
@@ -22,7 +23,7 @@ const quotes = { getQuote: async () => ({ text: 'q', author: 'a', source: 'local
 // each client keeps its own cookie jar and, like the real browser app, sends back the CSRF token it was given
 function client(app) {
   let cookie = '', csrf = '';
-  return async (method, url, payload) => {
+  const send = async (method, url, payload) => {
     const res = await app.inject({ method, url, payload, headers: { cookie, 'x-csrf-token': csrf } });
     const c = res.cookies.at(-1);
     if (c) cookie = `${c.name}=${c.value}`;
@@ -30,6 +31,8 @@ function client(app) {
     if (body?.csrfToken) csrf = body.csrfToken;
     return { code: res.statusCode, body };
   };
+  send.raw = (url) => app.inject({ method: 'GET', url, headers: { cookie } }); // the raw response, for non-JSON bodies (puzzle pictures)
+  return send;
 }
 const acct = (name, username) => ({ name, username, password: 'secret123', confirm: 'secret123' });
 
@@ -57,11 +60,40 @@ assert.equal((await call('GET', '/api/round')).code, 409); // no game yet
 assert.equal((await call('POST', '/api/game', { difficulty: 'nope' })).code, 400);
 const g = await call('POST', '/api/game', { difficulty: 'normal' });
 assert.ok(!('secret' in g.body) && !JSON.stringify(g.body).includes('[1,2,3,4]'), 'the code never reaches the browser');
-assert.ok(!JSON.stringify(g.body).includes('sanfoh'), 'no puzzle image link before a digit is revealed');
+assert.ok(!JSON.stringify(g.body).includes('sanfoh'), 'the Banana link never reaches the browser (its filename ends in the solution digit)');
 assert.deepEqual([g.body.length, g.body.attempts, g.body.total, g.body.lives, g.body.hints, g.body.skips], [4, 8, 120, 3, 2, 1]);
 assert.deepEqual(g.body.api, { source: 'live', latencyMs: 12 });
 assert.equal((await call('GET', '/api/round')).body.length, 4); // reload: same code
 assert.equal(banana.calls, 1); // no new fetch from the Banana API
+
+// --- puzzle pictures: the player solves them, but only through our own opaque URLs ---
+assert.ok(g.body.images.length === 4 && g.body.images.every((u) => /^\/api\/puzzle\/[0-3]\?v=\d+$/.test(u)), 'one picture URL per digit, on our own server');
+const pic = await call.raw(g.body.images[2]);
+assert.deepEqual([pic.statusCode, pic.headers['content-type']], [200, 'image/png']);
+assert.match(pic.body, /^https:\/\/www\.sanfoh\.com\/.*2\.png$/); // the fake picture for digit 3 (the body is its own link)
+const [picPath, picV] = g.body.images[0].split('?v=');
+for (const url of [`${picPath}?v=1`, `${picPath}`, `/api/puzzle/9?v=${picV}`, `/api/puzzle/x?v=${picV}`, `/api/puzzle/-1?v=${picV}`]) {
+  assert.equal((await call.raw(url)).statusCode, 404, url); // wrong code id, missing id, no such digit
+}
+assert.equal((await client(app).raw(g.body.images[0])).statusCode, 401); // pictures are for logged-in players
+const downCall = client(build({ banana: { ...fakeBanana(), getImage: async () => { throw new Error('down'); } }, quotes }));
+await downCall('POST', '/api/register', acct('Dan Lee', 'dan'));
+const downGame = (await downCall('POST', '/api/game', { difficulty: 'easy' })).body;
+assert.equal((await downCall.raw(downGame.images[0])).statusCode, 502); // picture host down: a clean error, the game goes on
+
+// a slow picture download must not undo what the player does meanwhile (the session plugin saves on every response)
+let openGate;
+const gate = new Promise((r) => { openGate = r; });
+const slowPic = client(build({ banana: { ...fakeBanana(), getImage: async (link) => { await gate; return { type: 'image/png', body: Buffer.from(link) }; } }, quotes }));
+await slowPic('POST', '/api/register', acct('Sam Lee', 'sam'));
+const slowGame = (await slowPic('POST', '/api/game', { difficulty: 'easy' })).body;
+const pending = slowPic.raw(slowGame.images[0]); // starts now, finishes only when the gate opens
+await new Promise((r) => setTimeout(r, 30));
+assert.equal((await slowPic('POST', '/api/hint')).body.revealed.length, 1); // a reveal while the picture is still downloading
+openGate();
+assert.equal((await pending).statusCode, 200);
+const afterSlow = (await slowPic('GET', '/api/round')).body;
+assert.deepEqual([afterSlow.revealed.length, afterSlow.hints], [1, 1], 'the slow picture request did not write its old session back');
 
 // --- guesses ---
 for (const bad of [[1, 2, 3], [1, 2, 3, 4, 5], ['1', '2', '3', '4'], [10, 0, 0, 0], [-1, 0, 0, 0], [1.5, 0, 0, 0], 'abcd', null]) {
@@ -75,7 +107,8 @@ assert.equal((await call('GET', '/api/round')).body.guesses.length, 1); // histo
 const c1 = (await call('POST', '/api/guess', { guess: [1, 2, 3, 4] })).body; // 2nd guess, 6 unused
 assert.deepEqual([c1.done, c1.solved, c1.secret, c1.streak], [true, true, [1, 2, 3, 4], 1]);
 assert.deepEqual(c1.puzzles.map((p) => p.digit), [1, 2, 3, 4]); // finished: the four puzzles behind the code are shown
-assert.ok(c1.puzzles.every((p) => p.image.startsWith('https://www.sanfoh.com/')));
+assert.ok(c1.puzzles.every((p) => /^\/api\/puzzle\/[0-3]\?v=\d+$/.test(p.image)) && !JSON.stringify(c1).includes('sanfoh'));
+assert.equal((await call.raw(c1.puzzles[0].image)).statusCode, 200); // the finished code's pictures are still served
 assert.ok(c1.points >= 556 && c1.points <= 560, `points ${c1.points}`);
 assert.equal((await call('POST', '/api/guess', { guess: WRONG })).code, 409); // code is over: need a new one
 
@@ -95,9 +128,8 @@ await call('GET', '/api/round'); // secret 3,3,4,4
 const h1 = (await call('POST', '/api/hint')).body;
 assert.equal(h1.revealed.length, 1);
 assert.equal(h1.revealed[0].digit, [3, 3, 4, 4][h1.revealed[0].index]); // reveals a true digit at its true place
-assert.match(h1.revealed[0].image, /^https:\/\/www\.sanfoh\.com\//); // together with the puzzle it came from
-const afterHint = JSON.stringify((await call('GET', '/api/round')).body);
-assert.equal((afterHint.match(/sanfoh/g) ?? []).length, 1, 'only the revealed puzzle image is sent, and it survives a reload');
+assert.deepEqual(Object.keys(h1.revealed[0]).sort(), ['digit', 'index']); // no Banana link: the pictures are already on screen
+assert.ok(!JSON.stringify((await call('GET', '/api/round')).body).includes('sanfoh'), 'a reload never exposes the Banana link');
 const h2 = (await call('POST', '/api/hint')).body;
 assert.deepEqual([h2.revealed.length, h2.hints], [2, 0]);
 assert.notEqual(h2.revealed[1].index, h2.revealed[0].index);

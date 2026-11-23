@@ -22,10 +22,16 @@ export function createGame({ timeLimitMs, bus }) {
   const expired = (g) => Date.now() - g.issuedAt > limitMs(g);
   const attemptsLeft = (g) => DIFF[g.difficulty].attempts - g.history.length;
 
+  // The puzzle picture for digit i of a code, as a URL on our own server. The Banana link is never sent to the browser:
+  // its filename ends in the solution digit. `v` ties the URL to this code, so a stale link cannot show another code's picture.
+  const puzzleUrl = (g, i) => (g.images?.[i] ? `/api/puzzle/${i}?v=${g.issuedAt}` : null);
+
   // What the browser may see: never the secret code, only the digits the player paid to reveal.
+  // The players solve the puzzle pictures, so `images` has one entry per digit (null if the Banana host gave no picture).
   const view = (g) => ({
     lives: g.lives, score: g.score, streak: g.streak, difficulty: g.difficulty,
     hints: g.hints, skips: g.skips, length: g.secret.length,
+    images: g.secret.map((_, i) => puzzleUrl(g, i)),
     guesses: g.history, attempts: DIFF[g.difficulty].attempts, revealed: g.revealed,
     api: g.api, seconds: secondsLeft(g), total: Math.round(limitMs(g) / 1000),
   });
@@ -44,7 +50,7 @@ export function createGame({ timeLimitMs, bus }) {
     return {
       next,
       // once a code is over the player may see the four Banana puzzles it was made from
-      result: { done: true, solved, timedOut, secret: g.secret, puzzles: g.secret.map((digit, i) => ({ digit, image: g.images?.[i] ?? null })), guesses: g.history, points, score: next.score, lives: next.lives, streak, bestStreak: next.bestStreak, over },
+      result: { done: true, solved, timedOut, secret: g.secret, puzzles: g.secret.map((digit, i) => ({ digit, image: puzzleUrl(g, i) })), guesses: g.history, points, score: next.score, lives: next.lives, streak, bestStreak: next.bestStreak, over },
     };
   }
 

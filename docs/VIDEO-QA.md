@@ -17,7 +17,7 @@ Tip: the brief wants you to compare and reflect, not list features. For each the
 
 ## 1. The project in one minute
 
-**What is it?** Banana Mastermind. The server builds a secret 4-digit code from the solution digits of four Banana API puzzles. The player guesses; each guess returns pegs (green = right digit, right place; hollow yellow = right digit, wrong place). Three levels, 3 lives, streak bonus, power-ups, live leaderboard, profile and badges.
+**What is it?** Banana Mastermind. The server builds a secret 4-digit code from the solution digits of four Banana API puzzles. The player solves the four puzzle pictures and guesses; each guess returns pegs (green = right digit, right place; hollow yellow = right digit, wrong place). Three levels, 3 lives, streak bonus, power-ups, live leaderboard, profile and badges.
 
 **What is the architecture?** A React single-page app (browser) talks JSON over HTTP to a Fastify server. The server talks to two external services (Banana API, ZenQuotes) and pushes live updates back to browsers with Server-Sent Events. It is a three-party distributed system: browser, our server, third-party services.
 
@@ -99,7 +99,7 @@ Tip: the brief wants you to compare and reflect, not list features. For each the
 
 **What protocol and format?** HTTPS with REST-style GET requests and JSON. Our own live updates use Server-Sent Events over HTTP.
 
-**Show the Banana API call.** `GET https://marcconrad.com/uob/banana/api.php?out=json` returns `{ "question": <image URL>, "solution": <digit> }`. I make four calls in parallel and use the four `solution` values as the code. (file: `server/services/banana.js`)
+**Show the Banana API call.** `GET https://marcconrad.com/uob/banana/api.php?out=json` returns `{ "question": <image URL>, "solution": <digit> }`. I make four calls in parallel and use the four `solution` values as the code. The image URL never goes to the browser, because its filename ends in the solution digit; my server downloads the picture and serves it from `/api/puzzle/:index`. (file: `server/services/banana.js`)
 
 **Why does the server call it, not the browser?** The code must stay secret: if the browser fetched the digits, anyone could read them in dev tools. CORS was not the problem (the API allows any origin). The server also gives a shared cache, a circuit breaker and validation.
 
@@ -125,13 +125,13 @@ Tip: the brief wants you to compare and reflect, not list features. For each the
 
 **Why REST?** Resources have URLs and HTTP methods have meaning (GET reads, POST changes), which is easy to understand, cache and test.
 
-**Why `out=json` and not `base64=yes` or `out=csv`?** I only need the solution digit, so JSON without the image is about 100 bytes. `base64=yes` embeds the whole PNG (about 60 KB) which I would not use. CSV is also small, but JSON is typed and safer to validate.
+**Why `out=json` and not `base64=yes` or `out=csv`?** The digit call stays at about 100 bytes, and the picture is fetched separately, so a picture failure never loses the digit. `base64=yes` would put the whole PNG (about 60 KB) into every call and into the digit cache. CSV is also small, but JSON is typed and safer to validate.
 
 **Did you disable certificate checks or anything unsafe for the API?** No. All calls use normal HTTPS verification; I never turn it off.
 
 **How do you test external services without the internet?** `fetch` is injected into the clients, so tests use fake services: success, bad payloads, timeouts, flaky, down, rate limited. No network is needed.
 
-**What are the weaknesses?** The game depends on the Banana API's good behaviour and availability; the terms say it may be discontinued and it must not be used commercially. Using it only as a digit source is a thin link to the API's real content (equation images). A closer integration would show the puzzle image behind each revealed digit.
+**What are the weaknesses?** The game depends on the Banana API's good behaviour and availability; the terms say it may be discontinued and it must not be used commercially. The picture link gives the answer away in its filename, so I never expose it; that means my server downloads and re-serves every picture (about 40 KB each), and if the picture host is down the player has only the pegs for that code.
 
 **How would a mobile app use your system?** It would call the same JSON endpoints, or just `/api/v1/scores` for the leaderboard.
 
@@ -167,7 +167,7 @@ Tip: the brief wants you to compare and reflect, not list features. For each the
 
 **What else protects data?** Login history (admin only, capped at 200 entries, usernames sanitised), CSV export protected against spreadsheet formula injection (cells starting with `=`, `+`, `-`, `@` are neutralised), no hashes or usernames in public API responses, and response headers `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`.
 
-**Is the secret code safe?** Yes: it stays in the server-side session. The browser only receives peg feedback, and the code only after the code is over, plus any digit the player chose to reveal.
+**Is the secret code safe?** Yes: it stays in the server-side session. The browser only receives peg feedback, and the code only after the code is over, plus any digit the player chose to reveal. The puzzle pictures are served by my own server under opaque URLs, because the Banana image filename ends in the solution digit.
 
 **Why sessions rather than JWT or OAuth?** Sessions suit a normal web app: the server can end a session instantly, and no token is stored in the browser where scripts could read it. JWT is stateless and useful for APIs and many services, but revoking a token before it expires needs extra work. OAuth/OpenID Connect means logging in through a provider (for example Google), so I would not store passwords at all, but I would depend on that provider. For a mobile app or several services I would move to tokens or OAuth.
 
@@ -207,7 +207,7 @@ Tip: the brief wants you to compare and reflect, not list features. For each the
 
 **Which theme was hardest?** Choose your honest answer. Good candidates: security (CSRF and Origin rules interact with the dev proxy), or resilience (parallel calls, circuit breaker states).
 
-**What would you change?** Use a real database and a shared session store, add 2FA and password reset, show the Banana puzzle images so the API's content is part of play, add a proper code review and CI to the Git workflow.
+**What would you change?** Use a real database and a shared session store, add 2FA and password reset, add a proper code review and CI to the Git workflow.
 
 **Which design decision are you most proud of, and why?** For example: enforcing the rules on the server, because browsers cannot be trusted, which links security, interoperability and distributed design in one decision.
 

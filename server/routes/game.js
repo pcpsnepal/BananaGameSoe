@@ -4,7 +4,7 @@ import { requireLogin } from './auth.js';
 import { BADGES } from '../profile.js';
 import { scoreGuess } from '../game.js';
 
-export function gameRoutes(app, { game, getDigits, getQuote, store }) {
+export function gameRoutes(app, { game, getDigits, getImage, getQuote, store }) {
   const auth = { preHandler: requireLogin };
   const { limitMs, expired, view, settle, attemptsLeft } = game;
 
@@ -57,6 +57,25 @@ export function gameRoutes(app, { game, getDigits, getQuote, store }) {
     return view(g);
   });
 
+  // The Banana puzzle picture for one digit of the player's current (or just finished) code. The server downloads it
+  // and serves it from here, because the Banana filename ends in the solution digit and must not reach the browser.
+  // `v` must match the code's id (see puzzleUrl in game.js), so an old URL never shows the next code's picture.
+  app.get('/api/puzzle/:index', auth, async (req, reply) => {
+    const g = req.session.game;
+    const i = Number(req.params.index);
+    if (!g || req.query.v !== String(g.issuedAt) || !Number.isInteger(i) || !g.images?.[i]) return reply.code(404).send({ error: 'no such puzzle' });
+    const link = g.images[i];
+    // This route only reads the session. Drop it now: @fastify/session saves on every response, and this request can be
+    // slow (it may download the picture), so it would write its old copy back over a guess or reveal made in the meantime.
+    req.session = {};
+    try {
+      const { type, body } = await getImage(link);
+      return reply.header('Cache-Control', 'private, max-age=600').type(type).send(body);
+    } catch {
+      return reply.code(502).send({ error: 'puzzle picture unavailable' });
+    }
+  });
+
   // One guess: an array of CODE_LENGTH digits, or {timeout:true} when the browser's clock ran out.
   app.post('/api/guess', auth, async (req, reply) => {
     const g = req.session.game;
@@ -93,7 +112,7 @@ export function gameRoutes(app, { game, getDigits, getQuote, store }) {
     if (g.hints <= 0 || g.revealed.length >= MAX_REVEALS) return reply.code(409).send({ error: 'no reveal available' });
     const hidden = g.secret.map((_, i) => i).filter((i) => !g.revealed.some((r) => r.index === i));
     const index = hidden[Math.floor(Math.random() * hidden.length)];
-    const revealed = [...g.revealed, { index, digit: g.secret[index], image: g.images?.[index] ?? null }]; // the puzzle behind this digit
+    const revealed = [...g.revealed, { index, digit: g.secret[index] }];
     req.session.game = { ...g, hinted: true, hints: g.hints - 1, revealed };
     return { revealed, hints: g.hints - 1 };
   });

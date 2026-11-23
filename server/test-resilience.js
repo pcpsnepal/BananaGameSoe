@@ -32,6 +32,28 @@ await keep.getDigits(1);
 okNow = false;
 assert.deepEqual((await keep.getDigits(1)).images, ['https://www.sanfoh.com/k.png']);
 
+// puzzle pictures (getImage): only a PNG from a validated Banana link, no redirects, size capped, cached with a bound
+const png = (bytes = 8, type = 'image/png') => ({ ok: true, status: 200, headers: { get: () => type }, arrayBuffer: async () => new ArrayBuffer(bytes) });
+const pic = 'https://www.sanfoh.com/uob/banana/data/a.png';
+let imgCalls = 0, lastInit;
+const pics = createBananaClient({ cacheSize: 2, fetchImpl: async (url, init) => { imgCalls++; lastInit = init; return png(); } });
+const p1 = await pics.getImage(pic);
+assert.deepEqual([p1.type, p1.body.length, lastInit.redirect, imgCalls], ['image/png', 8, 'error', 1]); // a redirect would be refused
+await pics.getImage(pic);
+assert.equal(imgCalls, 1, 'a repeat is served from memory');
+for (const bad of ['http://www.sanfoh.com/a.png', 'https://evil.example/a.png', 'https://sanfoh.com.evil.example/a.png', 'not a url', '', undefined]) {
+  await assert.rejects(pics.getImage(bad), /not a Banana image link/, String(bad));
+}
+assert.equal(imgCalls, 1, 'a bad link never triggers a fetch');
+await assert.rejects(createBananaClient({ fetchImpl: async () => png(8, 'text/html') }).getImage(pic), /Banana image/); // not a PNG
+await assert.rejects(createBananaClient({ fetchImpl: async () => ({ ...png(), ok: false, status: 500 }) }).getImage(pic), /Banana image 500/);
+await assert.rejects(createBananaClient({ fetchImpl: async () => png(1_000_001) }).getImage(pic), /too large/);
+await assert.rejects(createBananaClient({ fetchImpl: async () => { throw new Error('down'); } }).getImage(pic), /down/);
+await pics.getImage('https://www.sanfoh.com/b.png');
+await pics.getImage('https://www.sanfoh.com/c.png'); // third picture evicts the oldest
+await pics.getImage(pic);
+assert.equal(imgCalls, 4, 'the picture cache is bounded');
+
 // the solution is a string in some responses: accepted when it is a digit
 assert.deepEqual((await createBananaClient({ fetchImpl: solutionResponse('7') }).getDigits(2)).digits, [7, 7]);
 
